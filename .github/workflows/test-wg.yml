@@ -12,14 +12,18 @@ jobs:
           sudo apt update
           sudo apt install -y wireguard curl
 
-      - name: 🌐 Проверка доступа до VPN
+      - name: 🌐 Проверка интернета ДО VPN
         run: |
-          echo "📡 Проверка DNS:"
-          curl -s https://ipinfo.io/ip || echo "❌ curl до ipinfo.io не сработал"
-          echo "📶 Пинг до IP VPN сервера:"
-          ping -c 4 45.77.30.118 || echo "❌ Сервер VPN не отвечает на ping"
+          echo "📡 IP до VPN:"
+          echo "ipinfo.io:" && curl -s https://ipinfo.io/ip || echo "❌"
+          echo "ifconfig.me:" && curl -s https://ifconfig.me || echo "❌"
+          echo "api.myip.com:" && curl -s https://api.myip.com || echo "❌"
 
-      - name: 📝 Создание конфигурации
+          echo ""
+          echo "📶 Пинг до IP VPN сервера (может быть заблокирован):"
+          ping -c 4 45.77.30.118 || echo "❌ Сервер не отвечает на ping (это допустимо)"
+
+      - name: 📝 Создание WireGuard конфигурации
         run: |
           sudo mkdir -p /etc/wireguard
           echo "[Interface]" | sudo tee /etc/wireguard/wg0.conf
@@ -39,16 +43,19 @@ jobs:
           echo "🎯 WireGuard статус:"
           sudo wg show
 
-      - name: 🌍 Проверка IP через VPN
+      - name: 🌍 Проверка интернета ЧЕРЕЗ VPN
         run: |
           echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf
           sleep 3
-          echo "🌍 IP через VPN:"
-          curl -s https://ipinfo.io/ip || echo "❌ Не удалось получить IP через curl"
+          echo "🌐 IP через VPN:"
+          echo "ipinfo.io:" && curl -s https://ipinfo.io/ip || echo "❌"
+          echo "ifconfig.me:" && curl -s https://ifconfig.me || echo "❌"
+          echo "api.myip.com:" && curl -s https://api.myip.com || echo "❌"
 
-      - name: ✅ Проверка пинга через VPN
+      - name: ✅ Ping через VPN
         run: |
-          ping -c 4 1.1.1.1 || echo "❌ Ping через VPN не прошёл"
+          echo "📶 Ping до 1.1.1.1 через VPN:"
+          ping -c 4 1.1.1.1 || echo "❌ Ping не прошёл"
 
       - name: 📴 Отключение VPN
         if: always()
