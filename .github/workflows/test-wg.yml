@@ -13,7 +13,7 @@ jobs:
           sudo apt update
           sudo apt install -y wireguard curl
 
-            - name: 🌐 Проверка интернета ДО VPN
+      - name: 🌐 Проверка интернета ДО VPN
         run: |
           set -x
           echo "::group::IP до VPN"
@@ -58,16 +58,23 @@ jobs:
           set -x
           echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf
           sleep 3
-          echo "🌐 IP через VPN:"
-          echo "ipinfo.io:" && curl https://ipinfo.io/ip || echo "❌"
-          echo "ifconfig.me:" && curl https://ifconfig.me || echo "❌"
-          echo "api.myip.com:" && curl https://api.myip.com || echo "❌"
+          echo "::group::IP через VPN"
+          echo "ipinfo.io:"
+          curl https://ipinfo.io/ip || echo "❌"
+          echo ""
+          echo "ifconfig.me:"
+          curl https://ifconfig.me || echo "❌"
+          echo ""
+          echo "api.myip.com:"
+          curl https://api.myip.com || echo "❌"
+          echo "::endgroup::"
 
       - name: ✅ Ping через VPN
         run: |
           set -x
-          echo "📶 Ping до 1.1.1.1 через VPN:"
+          echo "::group::Ping до 1.1.1.1 через VPN"
           ping -c 4 1.1.1.1 || echo "❌ Ping не прошёл"
+          echo "::endgroup::"
 
       - name: 📴 Отключение VPN
         if: always()
