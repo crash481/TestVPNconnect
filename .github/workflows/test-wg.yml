@@ -13,17 +13,23 @@ jobs:
           sudo apt update
           sudo apt install -y wireguard curl
 
-      - name: 🌐 Проверка интернета ДО VPN
+            - name: 🌐 Проверка интернета ДО VPN
         run: |
           set -x
-          echo "📡 IP до VPN:"
-          echo "ipinfo.io:" && curl https://ipinfo.io/ip || echo "❌"
-          echo "ifconfig.me:" && curl https://ifconfig.me || echo "❌"
-          echo "api.myip.com:" && curl https://api.myip.com || echo "❌"
-
+          echo "::group::IP до VPN"
+          echo "ipinfo.io:"
+          curl https://ipinfo.io/ip || echo "❌"
           echo ""
-          echo "📶 Пинг до IP VPN сервера (может быть заблокирован):"
+          echo "ifconfig.me:"
+          curl https://ifconfig.me || echo "❌"
+          echo ""
+          echo "api.myip.com:"
+          curl https://api.myip.com || echo "❌"
+          echo "::endgroup::"
+
+          echo "::group::Ping до VPN-сервера"
           ping -c 4 45.77.30.118 || echo "❌ Сервер не отвечает на ping (это допустимо)"
+          echo "::endgroup::"
 
       - name: 📝 Создание WireGuard конфигурации
         run: |
