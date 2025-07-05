@@ -9,15 +9,17 @@ jobs:
     steps:
       - name: 🧰 Установка WireGuard
         run: |
+          set -x
           sudo apt update
           sudo apt install -y wireguard curl
 
       - name: 🌐 Проверка интернета ДО VPN
         run: |
+          set -x
           echo "📡 IP до VPN:"
-          echo "ipinfo.io:" && curl -s https://ipinfo.io/ip || echo "❌"
-          echo "ifconfig.me:" && curl -s https://ifconfig.me || echo "❌"
-          echo "api.myip.com:" && curl -s https://api.myip.com || echo "❌"
+          echo "ipinfo.io:" && curl https://ipinfo.io/ip || echo "❌"
+          echo "ifconfig.me:" && curl https://ifconfig.me || echo "❌"
+          echo "api.myip.com:" && curl https://api.myip.com || echo "❌"
 
           echo ""
           echo "📶 Пинг до IP VPN сервера (может быть заблокирован):"
@@ -25,6 +27,7 @@ jobs:
 
       - name: 📝 Создание WireGuard конфигурации
         run: |
+          set -x
           sudo mkdir -p /etc/wireguard
           echo "[Interface]" | sudo tee /etc/wireguard/wg0.conf
           echo "PrivateKey = gAyGrUttLdgh+ENPy7os9vFLycJgn6PC3XuANg6RAWg=" | sudo tee -a /etc/wireguard/wg0.conf
@@ -39,25 +42,29 @@ jobs:
 
       - name: 🔌 Подключение к VPN
         run: |
+          set -x
           sudo wg-quick up wg0
           echo "🎯 WireGuard статус:"
           sudo wg show
 
       - name: 🌍 Проверка интернета ЧЕРЕЗ VPN
         run: |
+          set -x
           echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf
           sleep 3
           echo "🌐 IP через VPN:"
-          echo "ipinfo.io:" && curl -s https://ipinfo.io/ip || echo "❌"
-          echo "ifconfig.me:" && curl -s https://ifconfig.me || echo "❌"
-          echo "api.myip.com:" && curl -s https://api.myip.com || echo "❌"
+          echo "ipinfo.io:" && curl https://ipinfo.io/ip || echo "❌"
+          echo "ifconfig.me:" && curl https://ifconfig.me || echo "❌"
+          echo "api.myip.com:" && curl https://api.myip.com || echo "❌"
 
       - name: ✅ Ping через VPN
         run: |
+          set -x
           echo "📶 Ping до 1.1.1.1 через VPN:"
           ping -c 4 1.1.1.1 || echo "❌ Ping не прошёл"
 
       - name: 📴 Отключение VPN
         if: always()
         run: |
+          set -x
           sudo wg-quick down wg0
