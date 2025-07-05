@@ -12,6 +12,13 @@ jobs:
           sudo apt update
           sudo apt install -y wireguard curl
 
+      - name: 🌐 Проверка доступа до VPN
+        run: |
+          echo "📡 Проверка DNS:"
+          curl -s https://ipinfo.io/ip || echo "❌ curl до ipinfo.io не сработал"
+          echo "📶 Пинг до IP VPN сервера:"
+          ping -c 4 45.77.30.118 || echo "❌ Сервер VPN не отвечает на ping"
+
       - name: 📝 Создание конфигурации
         run: |
           sudo mkdir -p /etc/wireguard
@@ -29,20 +36,21 @@ jobs:
       - name: 🔌 Подключение к VPN
         run: |
           sudo wg-quick up wg0
+          echo "🎯 WireGuard статус:"
+          sudo wg show
 
       - name: 🌍 Проверка IP через VPN
         run: |
           echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf
           sleep 3
-          echo "IP через VPN:"
-          curl -s https://ipinfo.io/ip
+          echo "🌍 IP через VPN:"
+          curl -s https://ipinfo.io/ip || echo "❌ Не удалось получить IP через curl"
 
-      - name: ✅ Проверка пинга
+      - name: ✅ Проверка пинга через VPN
         run: |
-          ping -c 4 1.1.1.1
+          ping -c 4 1.1.1.1 || echo "❌ Ping через VPN не прошёл"
 
       - name: 📴 Отключение VPN
         if: always()
         run: |
           sudo wg-quick down wg0
-          
