@@ -32,6 +32,7 @@ jobs:
 
       - name: 🌍 Проверка IP через VPN
         run: |
+          echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf
           sleep 3
           echo "IP через VPN:"
           curl -s https://ipinfo.io/ip
