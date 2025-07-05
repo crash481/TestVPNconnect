@@ -26,10 +26,12 @@ jobs:
           echo "api.myip.com:"
           curl https://api.myip.com || echo "❌"
           echo "::endgroup::"
+          echo "::notice ::Завершена проверка IP до VPN"
 
           echo "::group::Ping до VPN-сервера"
           ping -c 4 45.77.30.118 || echo "❌ Сервер не отвечает на ping (это допустимо)"
           echo "::endgroup::"
+          echo "::notice ::Завершён ping до VPN"
 
       - name: 📝 Создание WireGuard конфигурации
         run: |
