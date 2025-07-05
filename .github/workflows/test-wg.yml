@@ -1,0 +1,47 @@
+name: WireGuard Test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 🧰 Установка WireGuard
+        run: |
+          sudo apt update
+          sudo apt install -y wireguard curl
+
+      - name: 📝 Создание конфигурации
+        run: |
+          sudo tee /etc/wireguard/wg0.conf > /dev/null <<EOF
+[Interface]
+PrivateKey = gAyGrUttLdgh+ENPy7os9vFLycJgn6PC3XuANg6RAWg=
+Address = 10.1.0.2/32
+DNS = 1.1.1.1
+
+[Peer]
+PublicKey = /2MM4ThCUi3SEckHKqduAK/I09gMXoPSQIQR0H63ZAw=
+AllowedIPs = 0.0.0.0/0, ::/0
+Endpoint = 45.77.30.118:51821
+PersistentKeepalive = 25
+EOF
+
+      - name: 🔌 Подключение к VPN
+        run: |
+          sudo wg-quick up wg0
+
+      - name: 🌍 Проверка IP через VPN
+        run: |
+          sleep 3
+          echo "IP через VPN:"
+          curl -s https://ipinfo.io/ip
+
+      - name: ✅ Проверка пинга
+        run: |
+          ping -c 4 1.1.1.1
+
+      - name: 📴 Отключение VPN
+        if: always()
+        run: |
+          sudo wg-quick down wg0
