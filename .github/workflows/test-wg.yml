@@ -38,14 +38,14 @@ jobs:
           set -x
           sudo mkdir -p /etc/wireguard
           echo "[Interface]" | sudo tee /etc/wireguard/wg0.conf
-          echo "PrivateKey = gAyGrUttLdgh+ENPy7os9vFLycJgn6PC3XuANg6RAWg=" | sudo tee -a /etc/wireguard/wg0.conf
-          echo "Address = 10.1.0.2/32" | sudo tee -a /etc/wireguard/wg0.conf
+          echo "PrivateKey = 8KM5j7TQsHTB96G23ryNeatUEcpt8xoBAr2aGDxFomA=" | sudo tee -a /etc/wireguard/wg0.conf
+          echo "Address = 10.2.0.15/32" | sudo tee -a /etc/wireguard/wg0.conf
           echo "DNS = 1.1.1.1" | sudo tee -a /etc/wireguard/wg0.conf
           echo "" | sudo tee -a /etc/wireguard/wg0.conf
           echo "[Peer]" | sudo tee -a /etc/wireguard/wg0.conf
-          echo "PublicKey = /2MM4ThCUi3SEckHKqduAK/I09gMXoPSQIQR0H63ZAw=" | sudo tee -a /etc/wireguard/wg0.conf
+          echo "PublicKey = j5Kw2AD36sLmFFIMXnMeEcsqhZPTY/ACs+00MYv2ahc=" | sudo tee -a /etc/wireguard/wg0.conf
           echo "AllowedIPs = 0.0.0.0/0, ::/0" | sudo tee -a /etc/wireguard/wg0.conf
-          echo "Endpoint = 45.77.30.118:51821" | sudo tee -a /etc/wireguard/wg0.conf
+          echo "Endpoint = 45.77.30.118:51822" | sudo tee -a /etc/wireguard/wg0.conf
           echo "PersistentKeepalive = 25" | sudo tee -a /etc/wireguard/wg0.conf
 
       - name: 🔌 Подключение к VPN
