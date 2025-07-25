@@ -1,6 +1,8 @@
 name: WireGuard Test
 
 on:
+  schedule:
+    - cron: '*/3 * * * *'  # каждые 3 минуты (UTC)
   workflow_dispatch:
 
 jobs:
