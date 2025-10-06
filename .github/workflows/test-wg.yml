@@ -1,175 +1,202 @@
-name: wireguard-test
+name: WireGuard Test All Servers
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: '*/3 * * * *'
+    - cron: '*/30 * * * *' # каждые 30 минут
 
 jobs:
-  test:
+  fetch-servers:
     runs-on: ubuntu-latest
     env:
-      API_URL: "http://45.77.30.118:8080/get-config?server_id=us01&is_grand=true"
-      API_TIMEOUT: "10"
-      API_RETRIES: "3"
-      MASTER_XOR_SECRET: "oftai-ofgaize"  # для продакшена лучше хранить в Secrets
-
+      SERVERS_URL: "http://45.77.30.118:8080/servers"
+      MASTER_XOR_SECRET: "oftai-ofgaize"
+    outputs:
+      server_ids: ${{ steps.fetch.outputs.server_ids }}
     steps:
       - name: Install deps
         run: |
-          set -x
           sudo apt update
-          sudo apt install -y wireguard curl python3
+          sudo apt install -y curl python3
 
-      - name: Check IP before VPN
+      - name: Fetch server list & decode
+        id: fetch
         run: |
-          set -x
-          echo "::group::IP before VPN"
-          echo "ipinfo.io:" && curl https://ipinfo.io/ip || echo "❌"
-          echo ; echo "ifconfig.me:" && curl https://ifconfig.me || echo "❌"
-          echo ; echo "api.myip.com:" && curl https://api.myip.com || echo "❌"
-          echo "::endgroup::"
+          python3 <<'PY'
+          import os, sys, time, base64, hmac, hashlib, json, urllib.request
 
-      - name: Fetch & decode config (HMAC-SHA256 + XOR -> build wg0.conf)
-        shell: python
-        run: |
-          import os, sys, time, base64, hmac, hashlib, json, re, urllib.request
+          URL = os.getenv("SERVERS_URL")
+          MASTER = os.getenv("MASTER_XOR_SECRET")
+          TIMEOUT = 10
+          RETRIES = 3
 
-          API_URL = os.getenv("API_URL", "")
-          API_TIMEOUT = int(os.getenv("API_TIMEOUT", "10"))
-          API_RETRIES = int(os.getenv("API_RETRIES", "3"))
-          MASTER = os.getenv("MASTER_XOR_SECRET", "")
-
-          if not API_URL:
-              print("::error ::API_URL is empty")
-              sys.exit(1)
+          def derive_key(m, n): return hmac.new(m, n, hashlib.sha256).digest()
+          def xor_cycle(data,k): return bytes([b ^ k[i%len(k)] for i,b in enumerate(data)])
 
           last_err = None
-          for attempt in range(1, API_RETRIES + 1):
+          for i in range(RETRIES):
               try:
-                  req = urllib.request.Request(API_URL, method="GET")
-                  with urllib.request.urlopen(req, timeout=API_TIMEOUT) as resp:
-                      headers = dict(resp.getheaders())
-                      body = resp.read()
+                  req = urllib.request.Request(URL)
+                  with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+                      headers = dict(r.getheaders())
+                      body = r.read()
                   break
               except Exception as e:
                   last_err = e
                   time.sleep(2)
           else:
-              print(f"::error ::API is not reachable after {API_RETRIES} attempts: {last_err}")
+              print(f"::error ::Servers API not reachable: {last_err}")
               sys.exit(1)
 
-          xenc = headers.get("X-Encrypted") or headers.get("x-encrypted") or ""
-          nonce_b64 = headers.get("X-Nonce") or headers.get("x-nonce") or ""
-
-          def derive_key(m, n):
-              return hmac.new(m, n, hashlib.sha256).digest()
-
-          def xor_cycle(data, key):
-              k = len(key)
-              return bytes([b ^ key[i % k] for i, b in enumerate(data)])
-
-          plain = body
-          if xenc == "1" and nonce_b64:
+          xenc = headers.get("X-Encrypted") or headers.get("x-encrypted")
+          nonce = headers.get("X-Nonce") or headers.get("x-nonce")
+          if xenc=="1" and nonce:
               if not MASTER:
-                  print("::error ::MASTER_XOR_SECRET is empty")
+                  print("::error ::MASTER_XOR_SECRET missing")
                   sys.exit(1)
-              try:
-                  cipher = base64.b64decode(body)
-                  nonce = base64.b64decode(nonce_b64)
-              except Exception as e:
-                  print(f"::error ::Invalid base64 in body/nonce: {e}")
-                  sys.exit(1)
-              key = derive_key(MASTER.encode("utf-8"), nonce)
-              plain = xor_cycle(cipher, key)
+              body = xor_cycle(base64.b64decode(body),
+                               hmac.new(MASTER.encode(), base64.b64decode(nonce), hashlib.sha256).digest())
 
-          text = plain.decode("utf-8", errors="ignore")
+          txt = body.decode("utf-8", errors="ignore")
+          try:
+              data = json.loads(txt)
+          except Exception:
+              print("::error ::Servers API returned non-JSON")
+              print(txt[:500]); sys.exit(1)
 
-          wg_conf = None
-          if "[Interface]" in text:
-              wg_conf = text
-              print("::notice ::Plaintext contains [Interface] -> using as-is")
-          else:
-              # Expecting JSON with fields: private_key, address, server_ip, server_port, server_public_key
-              try:
-                  js = json.loads(text)
-                  print("::group::Decrypted JSON")
-                  print(json.dumps(js, ensure_ascii=False, indent=2))
-                  print("::endgroup::")
-                  need = ["private_key","address","server_ip","server_port","server_public_key"]
-                  missing = [k for k in need if k not in js or not js[k]]
-                  if missing:
-                      print("::error ::Missing fields in JSON: " + ", ".join(missing))
-                      sys.exit(1)
-                  private_key = str(js["private_key"])
-                  address = str(js["address"])
-                  server_ip = str(js["server_ip"])
-                  server_port = str(js["server_port"])
-                  server_public_key = str(js["server_public_key"])
-
-                  wg_lines = [
-                      "[Interface]",
-                      "PrivateKey = " + private_key,
-                      "Address = " + address,
-                      "DNS = 1.1.1.1",
-                      "",
-                      "[Peer]",
-                      "PublicKey = " + server_public_key,
-                      "AllowedIPs = 0.0.0.0/0, ::/0",
-                      "Endpoint = " + server_ip + ":" + server_port,
-                      "PersistentKeepalive = 25",
-                  ]
-                  wg_conf = "\n".join(wg_lines)
-              except Exception:
-                  print("::error ::API response is neither a wg config nor valid JSON")
-                  print(text[:500])
-                  sys.exit(1)
-
-          if not wg_conf:
-              print("::error ::Failed to obtain wg config")
+          if not isinstance(data, list):
+              print("::error ::Servers API JSON is not list")
               sys.exit(1)
 
-          # Preview without leaking PrivateKey
-          safe_conf = re.sub(r"(?m)^\\s*PrivateKey\\s*=.*$", "PrivateKey = ***", wg_conf)
-          print("::group::wg0.conf preview")
-          print(safe_conf[:2000])
-          print("::endgroup::")
+          ids = [srv.get("serverId") for srv in data if srv.get("serverId")]
+          if not ids:
+              print("::error ::No serverId found in response")
+              sys.exit(1)
 
-          with open("wg0.conf","w") as f:
-              f.write(wg_conf)
-          print("::notice ::wg0.conf written")
+          print(f"::notice ::Found {len(ids)} servers: {', '.join(ids)}")
+          # 👉 Новый способ отдать output
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as gh:
+              import json as js
+              gh.write(f"server_ids={js.dumps(ids)}\n")
+          PY
 
-      - name: Install wg0.conf to /etc/wireguard
+  test:
+    needs: fetch-servers
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        server_id: ${{ fromJson(needs.fetch-servers.outputs.server_ids) }}
+    env:
+      API_TIMEOUT: "10"
+      API_RETRIES: "3"
+      MASTER_XOR_SECRET: "oftai-ofgaize"
+    steps:
+      - name: Install deps
         run: |
-          set -x
+          sudo apt update
+          sudo apt install -y wireguard curl python3
+
+      - name: 🌐 IP before VPN
+        run: |
+          echo "::group::IP before VPN"
+          curl -s https://ipinfo.io/ip || echo "❌"
+          echo ; curl -s https://ifconfig.me || echo "❌"
+          echo ; curl -s https://api.myip.com || echo "❌"
+          echo "::endgroup::"
+
+      - name: 🔑 Fetch & build config for ${{ matrix.server_id }}
+        run: |
+          python3 <<'PY'
+          import os, sys, time, base64, hmac, hashlib, json, re, urllib.request
+
+          sid = "${{ matrix.server_id }}"
+          API_URL = f"http://45.77.30.118:8080/get-config?server_id={sid}&is_grand=true"
+          TIMEOUT = int(os.getenv("API_TIMEOUT","10"))
+          RETRIES = int(os.getenv("API_RETRIES","3"))
+          MASTER = os.getenv("MASTER_XOR_SECRET","")
+
+          def derive_key(m,n): return hmac.new(m,n,hashlib.sha256).digest()
+          def xor_cycle(data,k): return bytes([b ^ k[i%len(k)] for i,b in enumerate(data)])
+
+          last_err=None
+          for _ in range(RETRIES):
+              try:
+                  req=urllib.request.Request(API_URL)
+                  with urllib.request.urlopen(req,timeout=TIMEOUT) as r:
+                      headers=dict(r.getheaders())
+                      body=r.read()
+                  break
+              except Exception as e:
+                  last_err=e
+                  time.sleep(2)
+          else:
+              print("::error ::API unreachable:",last_err)
+              sys.exit(1)
+
+          xenc=headers.get("X-Encrypted") or headers.get("x-encrypted")
+          nonce=headers.get("X-Nonce") or headers.get("x-nonce")
+          if xenc=="1" and nonce:
+              if not MASTER:
+                  print("::error ::MASTER_XOR_SECRET empty")
+                  sys.exit(1)
+              body=xor_cycle(base64.b64decode(body),
+                             hmac.new(MASTER.encode(),base64.b64decode(nonce),hashlib.sha256).digest())
+
+          text=body.decode("utf-8","ignore")
+          wg=None
+          if "[Interface]" in text:
+              wg=text
+          else:
+              try:
+                  j=json.loads(text)
+                  if all(k in j for k in ["private_key","address","server_ip","server_port","server_public_key"]):
+                      wg="\n".join([
+                          "[Interface]",
+                          f"PrivateKey = {j['private_key']}",
+                          f"Address = {j['address']}",
+                          "DNS = 1.1.1.1",
+                          "",
+                          "[Peer]",
+                          f"PublicKey = {j['server_public_key']}",
+                          "AllowedIPs = 0.0.0.0/0, ::/0",
+                          f"Endpoint = {j['server_ip']}:{j['server_port']}",
+                          "PersistentKeepalive = 25"
+                      ])
+              except: pass
+
+          if not wg:
+              print("::error ::no wg_conf for",sid)
+              sys.exit(1)
+
+          with open("wg0.conf","w") as f: f.write(wg)
+          print("::notice ::wg0.conf for",sid,"written")
+          PY
+
+      - name: Install wg0.conf
+        run: |
           sudo mkdir -p /etc/wireguard
           sudo mv wg0.conf /etc/wireguard/wg0.conf
           sudo chmod 600 /etc/wireguard/wg0.conf
 
-      - name: Connect VPN
+      - name: 🔌 Connect VPN
         run: |
-          set -x
           sudo wg-quick up wg0
           sudo wg show
 
-      - name: Check IP through VPN
+      - name: 🌍 IP via VPN
         run: |
-          set -x
           echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf
           sleep 3
           echo "::group::IP via VPN"
-          echo "ipinfo.io:" && curl https://ipinfo.io/ip || echo "❌"
-          echo ; echo "ifconfig.me:" && curl https://ifconfig.me || echo "❌"
-          echo ; echo "api.myip.com:" && curl https://api.myip.com || echo "❌"
+          curl -s https://ipinfo.io/ip || echo "❌"
+          echo ; curl -s https://ifconfig.me || echo "❌"
+          echo ; curl -s https://api.myip.com || echo "❌"
           echo "::endgroup::"
 
-      - name: Ping via VPN
-        run: |
-          set -x
-          ping -c 4 1.1.1.1 || echo "❌ Ping failed"
+      - name: ✅ Ping via VPN
+        run: ping -c 4 1.1.1.1 || echo "❌ Ping failed"
 
-      - name: Disconnect
+      - name: 📴 Disconnect
         if: always()
-        run: |
-          set -x
-          sudo wg-quick down wg0
+        run: sudo wg-quick down wg0
