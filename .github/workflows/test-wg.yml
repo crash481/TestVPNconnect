@@ -40,8 +40,8 @@ jobs:
           set -x
           sudo mkdir -p /etc/wireguard
           echo "[Interface]" | sudo tee /etc/wireguard/wg0.conf
-          echo "PrivateKey = eNSXciOY0oYYxFY2SyalaL8BOCKuPFvGYwy5iNa/Xkg=" | sudo tee -a /etc/wireguard/wg0.conf
-          echo "Address = 10.2.2.123/32" | sudo tee -a /etc/wireguard/wg0.conf
+          echo "PrivateKey = KCeqa804eesNk8/epzVFRAlbf3d++kFP2IUW8D23HmU=" | sudo tee -a /etc/wireguard/wg0.conf
+          echo "Address = 10.2.2.161/32" | sudo tee -a /etc/wireguard/wg0.conf
           echo "DNS = 1.1.1.1" | sudo tee -a /etc/wireguard/wg0.conf
           echo "" | sudo tee -a /etc/wireguard/wg0.conf
           echo "[Peer]" | sudo tee -a /etc/wireguard/wg0.conf
