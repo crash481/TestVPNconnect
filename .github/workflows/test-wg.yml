@@ -3,7 +3,7 @@ name: WireGuard Test All Servers
 on:
   workflow_dispatch:
   schedule:
-    - cron: '*/30 * * * *' # каждые 30 минут
+    - cron: '*/30 * * * *' # every 30 minutes
 
 jobs:
   fetch-servers:
@@ -16,12 +16,14 @@ jobs:
     steps:
       - name: Install deps
         run: |
+          set -e
           sudo apt update
           sudo apt install -y curl python3
 
       - name: Fetch server list & decode
         id: fetch
         run: |
+          set -e
           python3 <<'PY'
           import os, sys, time, base64, hmac, hashlib, json, urllib.request
 
@@ -33,51 +35,66 @@ jobs:
           def derive_key(m, n): return hmac.new(m, n, hashlib.sha256).digest()
           def xor_cycle(data,k): return bytes([b ^ k[i%len(k)] for i,b in enumerate(data)])
 
+          # 1) fetch (rule 1: fail if unreachable)
           last_err = None
           for i in range(RETRIES):
-              try:
-                  req = urllib.request.Request(URL)
-                  with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
-                      headers = dict(r.getheaders())
-                      body = r.read()
-                  break
-              except Exception as e:
-                  last_err = e
-                  time.sleep(2)
+            try:
+              req = urllib.request.Request(URL)
+              with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+                headers = dict(r.getheaders())
+                body = r.read()
+              break
+            except Exception as e:
+              last_err = e
+              time.sleep(2)
           else:
-              print(f"::error ::Servers API not reachable: {last_err}")
-              sys.exit(1)
+            print(f"::error ::Servers API not reachable: {last_err}")
+            sys.exit(1)
 
+          # 2) decrypt if needed (rule 1: fail if decode/parsing error)
           xenc = headers.get("X-Encrypted") or headers.get("x-encrypted")
           nonce = headers.get("X-Nonce") or headers.get("x-nonce")
-          if xenc=="1" and nonce:
-              if not MASTER:
-                  print("::error ::MASTER_XOR_SECRET missing")
-                  sys.exit(1)
-              body = xor_cycle(base64.b64decode(body),
-                               hmac.new(MASTER.encode(), base64.b64decode(nonce), hashlib.sha256).digest())
+          if xenc == "1" and nonce:
+            if not MASTER:
+              print("::error ::MASTER_XOR_SECRET missing")
+              sys.exit(1)
+            try:
+              body = xor_cycle(
+                base64.b64decode(body),
+                hmac.new(MASTER.encode(), base64.b64decode(nonce), hashlib.sha256).digest()
+              )
+            except Exception as e:
+              print(f"::error ::Servers API decrypt error: {e}")
+              sys.exit(1)
 
           txt = body.decode("utf-8", errors="ignore")
           try:
-              data = json.loads(txt)
+            data = json.loads(txt)
           except Exception:
-              print("::error ::Servers API returned non-JSON")
-              print(txt[:500]); sys.exit(1)
+            print("::error ::Servers API returned non-JSON")
+            print(txt[:500])
+            sys.exit(1)
+
+          # Pretty print full server list
+          print("::group::Decoded server list")
+          print(json.dumps(data, indent=2, ensure_ascii=False))
+          print("::endgroup::")
 
           if not isinstance(data, list):
-              print("::error ::Servers API JSON is not list")
-              sys.exit(1)
+            print("::error ::Servers API JSON is not a list")
+            sys.exit(1)
 
           ids = [srv.get("serverId") for srv in data if srv.get("serverId")]
-          if not ids:
-              print("::error ::No serverId found in response")
-              sys.exit(1)
+          # rule 1: list must be >= 3
+          if not ids or len(ids) < 3:
+            print(f"::error ::Server list too short: {len(ids)} found (need >= 3)")
+            sys.exit(1)
 
           print(f"::notice ::Found {len(ids)} servers: {', '.join(ids)}")
-          # 👉 Новый способ отдать output
+
+          # pass to next job
           with open(os.environ['GITHUB_OUTPUT'], 'a') as gh:
-              import json as js
-              gh.write(f"server_ids={js.dumps(ids)}\n")
+            gh.write(f"server_ids={json.dumps(ids)}\n")
           PY
 
   test:
@@ -94,19 +111,51 @@ jobs:
     steps:
       - name: Install deps
         run: |
+          set -e
           sudo apt update
-          sudo apt install -y wireguard curl python3
+          sudo apt install -y wireguard curl python3 jq
 
-      - name: 🌐 IP before VPN
+      - name: IP before VPN (all 3 must succeed)
         run: |
-          echo "::group::IP before VPN"
-          curl -s https://ipinfo.io/ip || echo "❌"
-          echo ; curl -s https://ifconfig.me || echo "❌"
-          echo ; curl -s https://api.myip.com || echo "❌"
-          echo "::endgroup::"
+          set -e
+          python3 <<'PY'
+          import json, subprocess, sys
 
-      - name: 🔑 Fetch & build config for ${{ matrix.server_id }}
+          def fetch(cmd):
+            try:
+              out = subprocess.check_output(cmd, shell=True, timeout=10).decode().strip()
+              if not out: raise RuntimeError("empty")
+              return out
+            except Exception:
+              return None
+
+          ip1 = fetch("curl -s https://ipinfo.io/ip")
+          ip2 = fetch("curl -s https://ifconfig.me")
+          api = fetch("curl -s https://api.myip.com")
+
+          print("::group::IP before VPN")
+          print(f"{ip1 or '❌'} (ipinfo.io)")
+          print(f"{ip2 or '❌'} (ifconfig.me)")
+          print(f"{api or '❌'} (api.myip.com)")
+          print("::endgroup::")
+
+          # rule 3: all three must succeed (ipinfo, ifconfig, api.myip.com JSON)
+          if not ip1 or not ip2 or not api:
+            print("::error ::IP before VPN: at least one source failed")
+            sys.exit(1)
+
+          try:
+            apij = json.loads(api)
+            if "ip" not in apij or not apij["ip"]:
+              raise ValueError("api.myip.com has no 'ip'")
+          except Exception:
+            print("::error ::IP before VPN: api.myip.com returned invalid JSON")
+            sys.exit(1)
+          PY
+
+      - name: Fetch & build config for ${{ matrix.server_id }}
         run: |
+          set -e
           python3 <<'PY'
           import os, sys, time, base64, hmac, hashlib, json, re, urllib.request
 
@@ -119,84 +168,162 @@ jobs:
           def derive_key(m,n): return hmac.new(m,n,hashlib.sha256).digest()
           def xor_cycle(data,k): return bytes([b ^ k[i%len(k)] for i,b in enumerate(data)])
 
+          # rule 2: fail on request/parse/decode error
           last_err=None
           for _ in range(RETRIES):
-              try:
-                  req=urllib.request.Request(API_URL)
-                  with urllib.request.urlopen(req,timeout=TIMEOUT) as r:
-                      headers=dict(r.getheaders())
-                      body=r.read()
-                  break
-              except Exception as e:
-                  last_err=e
-                  time.sleep(2)
+            try:
+              req=urllib.request.Request(API_URL)
+              with urllib.request.urlopen(req,timeout=TIMEOUT) as r:
+                headers=dict(r.getheaders())
+                body=r.read()
+              break
+            except Exception as e:
+              last_err=e
+              time.sleep(2)
           else:
-              print("::error ::API unreachable:",last_err)
-              sys.exit(1)
+            print("::error ::Config API unreachable:",last_err)
+            sys.exit(1)
 
           xenc=headers.get("X-Encrypted") or headers.get("x-encrypted")
           nonce=headers.get("X-Nonce") or headers.get("x-nonce")
           if xenc=="1" and nonce:
-              if not MASTER:
-                  print("::error ::MASTER_XOR_SECRET empty")
-                  sys.exit(1)
+            if not MASTER:
+              print("::error ::MASTER_XOR_SECRET empty")
+              sys.exit(1)
+            try:
               body=xor_cycle(base64.b64decode(body),
                              hmac.new(MASTER.encode(),base64.b64decode(nonce),hashlib.sha256).digest())
+            except Exception as e:
+              print("::error ::Config decrypt error:",e)
+              sys.exit(1)
 
           text=body.decode("utf-8","ignore")
           wg=None
+          json_data=None
           if "[Interface]" in text:
-              wg=text
+            wg=text
           else:
-              try:
-                  j=json.loads(text)
-                  if all(k in j for k in ["private_key","address","server_ip","server_port","server_public_key"]):
-                      wg="\n".join([
-                          "[Interface]",
-                          f"PrivateKey = {j['private_key']}",
-                          f"Address = {j['address']}",
-                          "DNS = 1.1.1.1",
-                          "",
-                          "[Peer]",
-                          f"PublicKey = {j['server_public_key']}",
-                          "AllowedIPs = 0.0.0.0/0, ::/0",
-                          f"Endpoint = {j['server_ip']}:{j['server_port']}",
-                          "PersistentKeepalive = 25"
-                      ])
-              except: pass
-
-          if not wg:
-              print("::error ::no wg_conf for",sid)
+            try:
+              j=json.loads(text)
+              json_data=j
+            except Exception:
+              print("::error ::Config API returned non-JSON and not wg config")
+              print(text[:500])
               sys.exit(1)
 
+          if json_data is not None:
+            need = ["private_key","address","server_ip","server_port","server_public_key"]
+            miss = [k for k in need if k not in json_data or not json_data[k]]
+            if miss:
+              print(f"::error ::Config JSON missing fields: {', '.join(miss)}")
+              sys.exit(1)
+
+            # build wg0.conf
+            wg="\n".join([
+              "[Interface]",
+              f"PrivateKey = {json_data['private_key']}",
+              f"Address = {json_data['address']}",
+              "DNS = 1.1.1.1",
+              "",
+              "[Peer]",
+              f"PublicKey = {json_data['server_public_key']}",
+              "AllowedIPs = 0.0.0.0/0, ::/0",
+              f"Endpoint = {json_data['server_ip']}:{json_data['server_port']}",
+              "PersistentKeepalive = 25"
+            ])
+
+            # expose server_ip for later checks (rule 8)
+            with open(os.environ["GITHUB_ENV"], "a") as envf:
+              envf.write(f"SERVER_IP_EXPECTED={json_data['server_ip']}\n")
+
+            print("::group::Decoded JSON")
+            print(json.dumps(json_data, indent=2))
+            print("::endgroup::")
+
+          masked = re.sub(r'(?m)^(PrivateKey\s*=\s*).+$', r'\1***', wg)
+          print("::group::wg0.conf")
+          print(masked)
+          print("::endgroup::")
+
+          # write config to /etc
+          os.system('sudo mkdir -p /etc/wireguard')
           with open("wg0.conf","w") as f: f.write(wg)
-          print("::notice ::wg0.conf for",sid,"written")
+          os.system('sudo mv wg0.conf /etc/wireguard/wg0.conf')
+          os.system('sudo chmod 600 /etc/wireguard/wg0.conf')
           PY
 
-      - name: Install wg0.conf
+      - name: Connect VPN
         run: |
-          sudo mkdir -p /etc/wireguard
-          sudo mv wg0.conf /etc/wireguard/wg0.conf
-          sudo chmod 600 /etc/wireguard/wg0.conf
-
-      - name: 🔌 Connect VPN
-        run: |
+          set -e
           sudo wg-quick up wg0
           sudo wg show
 
-      - name: 🌍 IP via VPN
+      - name: IP via VPN (3 sources must succeed, equal to each other and to config server_ip)
         run: |
-          echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf
+          set -e
+          echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf >/dev/null
           sleep 3
-          echo "::group::IP via VPN"
-          curl -s https://ipinfo.io/ip || echo "❌"
-          echo ; curl -s https://ifconfig.me || echo "❌"
-          echo ; curl -s https://api.myip.com || echo "❌"
-          echo "::endgroup::"
+          python3 <<'PY'
+          import json, subprocess, sys, os, re
 
-      - name: ✅ Ping via VPN
-        run: ping -c 4 1.1.1.1 || echo "❌ Ping failed"
+          exp = os.getenv("SERVER_IP_EXPECTED","").strip()
+          if not exp:
+            print("::error ::Expected server IP missing from env (SERVER_IP_EXPECTED)")
+            sys.exit(1)
 
-      - name: 📴 Disconnect
+          def fetch(cmd):
+            try:
+              out = subprocess.check_output(cmd, shell=True, timeout=10).decode().strip()
+              if not out: raise RuntimeError("empty")
+              return out
+            except Exception:
+              return None
+
+          ip1 = fetch("curl -s https://ipinfo.io/ip")
+          ip2 = fetch("curl -s https://ifconfig.me")
+          api = fetch("curl -s https://api.myip.com")
+
+          print("::group::IP via VPN")
+          print(f"{ip1 or '❌'} (ipinfo.io)")
+          print(f"{ip2 or '❌'} (ifconfig.me)")
+          print(f"{api or '❌'} (api.myip.com)")
+          print("::endgroup::")
+
+          # rule 6: all three must succeed
+          if not ip1 or not ip2 or not api:
+            print("::error ::IP via VPN: at least one source failed")
+            sys.exit(1)
+
+          # parse api.myip.com
+          try:
+            apij = json.loads(api)
+            ip3 = apij.get("ip","").strip()
+            if not ip3:
+              raise ValueError("missing ip")
+          except Exception:
+            print("::error ::IP via VPN: api.myip.com invalid JSON")
+            sys.exit(1)
+
+          # rule 7: all equal to each other
+          if not (ip1 == ip2 == ip3):
+            print(f"::error ::IP mismatch across sources: ipinfo={ip1}, ifconfig={ip2}, api.myip.com={ip3}")
+            sys.exit(1)
+
+          # rule 8: equal to server_ip from config
+          if ip1 != exp:
+            print(f"::error ::VPN IP {ip1} doesn't match server_ip from config {exp}")
+            sys.exit(1)
+
+          print(f"::notice ::VPN IP {ip1} matches config and all sources")
+          PY
+
+      - name: Ping via VPN (must succeed)
+        run: |
+          set -e
+          ping -c 4 1.1.1.1
+          echo "::notice ::Ping successful"
+
+      - name: Disconnect
         if: always()
-        run: sudo wg-quick down wg0
+        run: |
+          sudo wg-quick down wg0 || true
