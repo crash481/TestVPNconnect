@@ -1,100 +1,82 @@
-name: WireGuard Test All Servers
+name: WireGuard Test
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: '*/30 * * * *' # every 30 minutes
+    - cron: '*/30 * * * *'  # каждые 30 минут
 
 jobs:
   fetch-servers:
     runs-on: ubuntu-latest
     env:
-      SERVERS_URL: "http://45.77.30.118:8080/servers"
-      MASTER_XOR_SECRET: "oftai-ofgaize"
+      API_BASE_URL: ${{ secrets.API_BASE_URL }}
+      MASTER_XOR_SECRET: ${{ secrets.MASTER_XOR_SECRET }}
     outputs:
       server_ids: ${{ steps.fetch.outputs.server_ids }}
     steps:
       - name: Install deps
+        shell: bash
         run: |
-          set -e
-          sudo apt update
-          sudo apt install -y curl python3
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y curl python3
 
       - name: Fetch server list & decode
         id: fetch
+        shell: bash
         run: |
-          set -e
+          set -euo pipefail
           python3 <<'PY'
           import os, sys, time, base64, hmac, hashlib, json, urllib.request
 
-          URL = os.getenv("SERVERS_URL")
-          MASTER = os.getenv("MASTER_XOR_SECRET")
-          TIMEOUT = 10
-          RETRIES = 3
+          BASE = (os.getenv("API_BASE_URL") or "").rstrip("/")
+          MASTER = os.getenv("MASTER_XOR_SECRET") or ""
+          URL = BASE + "/servers"
+          TIMEOUT, RETRIES = 10, 3
 
-          def derive_key(m, n): return hmac.new(m, n, hashlib.sha256).digest()
-          def xor_cycle(data,k): return bytes([b ^ k[i%len(k)] for i,b in enumerate(data)])
+          def k(m,n): return hmac.new(m,n,hashlib.sha256).digest()
+          def xo(d,kk): return bytes([b ^ kk[i%len(kk)] for i,b in enumerate(d)])
 
-          # 1) fetch (rule 1: fail if unreachable)
-          last_err = None
-          for i in range(RETRIES):
-            try:
-              req = urllib.request.Request(URL)
-              with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
-                headers = dict(r.getheaders())
-                body = r.read()
-              break
-            except Exception as e:
-              last_err = e
-              time.sleep(2)
+          last_err=None
+          for _ in range(RETRIES):
+              try:
+                  with urllib.request.urlopen(URL,timeout=TIMEOUT) as r:
+                      hdr=dict(r.getheaders()); body=r.read()
+                  break
+              except Exception as e:
+                  last_err=e; time.sleep(2)
           else:
-            print(f"::error ::Servers API not reachable: {last_err}")
-            sys.exit(1)
+              print(f"::error ::Servers API not reachable: {last_err}"); sys.exit(1)
 
-          # 2) decrypt if needed (rule 1: fail if decode/parsing error)
-          xenc = headers.get("X-Encrypted") or headers.get("x-encrypted")
-          nonce = headers.get("X-Nonce") or headers.get("x-nonce")
-          if xenc == "1" and nonce:
-            if not MASTER:
-              print("::error ::MASTER_XOR_SECRET missing")
-              sys.exit(1)
-            try:
-              body = xor_cycle(
-                base64.b64decode(body),
-                hmac.new(MASTER.encode(), base64.b64decode(nonce), hashlib.sha256).digest()
-              )
-            except Exception as e:
-              print(f"::error ::Servers API decrypt error: {e}")
-              sys.exit(1)
+          xenc = hdr.get("X-Encrypted") or hdr.get("x-encrypted")
+          nonce= hdr.get("X-Nonce") or hdr.get("x-nonce")
+          plain = body
+          if xenc=="1" and nonce:
+              if not MASTER: print("::error ::MASTER_XOR_SECRET missing"); sys.exit(1)
+              try:
+                  plain = xo(base64.b64decode(body), k(MASTER.encode(), base64.b64decode(nonce)))
+              except Exception as e:
+                  print(f"::error ::Servers API decrypt error: {e}"); sys.exit(1)
 
-          txt = body.decode("utf-8", errors="ignore")
+          txt = plain.decode("utf-8","ignore")
           try:
-            data = json.loads(txt)
+              data = json.loads(txt)
           except Exception:
-            print("::error ::Servers API returned non-JSON")
-            print(txt[:500])
-            sys.exit(1)
+              print("::error ::Servers API returned non-JSON"); print(txt[:500]); sys.exit(1)
 
-          # Pretty print full server list
           print("::group::Decoded server list")
           print(json.dumps(data, indent=2, ensure_ascii=False))
           print("::endgroup::")
 
-          if not isinstance(data, list):
-            print("::error ::Servers API JSON is not a list")
-            sys.exit(1)
+          if not isinstance(data,list) or not data:
+              print("::error ::Server list empty/invalid"); sys.exit(1)
 
-          ids = [srv.get("serverId") for srv in data if srv.get("serverId")]
-          # rule 1: list must be >= 3
-          if not ids or len(ids) < 3:
-            print(f"::error ::Server list too short: {len(ids)} found (need >= 3)")
-            sys.exit(1)
+          ids = [s.get("serverId") for s in data if s.get("serverId")]
+          if not ids:
+              print("::error ::No serverId found"); sys.exit(1)
 
-          print(f"::notice ::Found {len(ids)} servers: {', '.join(ids)}")
-
-          # pass to next job
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as gh:
-            gh.write(f"server_ids={json.dumps(ids)}\n")
+          with open(os.environ["GITHUB_OUTPUT"],"a") as gh:
+              gh.write(f"server_ids={json.dumps(ids)}\n")
           PY
 
   test:
@@ -105,225 +87,316 @@ jobs:
       matrix:
         server_id: ${{ fromJson(needs.fetch-servers.outputs.server_ids) }}
     env:
-      API_TIMEOUT: "10"
-      API_RETRIES: "3"
-      MASTER_XOR_SECRET: "oftai-ofgaize"
+      API_BASE_URL: ${{ secrets.API_BASE_URL }}
+      MASTER_XOR_SECRET: ${{ secrets.MASTER_XOR_SECRET }}
     steps:
-      - name: Install deps
+      - name: Install WireGuard & tools
+        shell: bash
         run: |
-          set -e
-          sudo apt update
-          sudo apt install -y wireguard curl python3 jq
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y wireguard curl python3
 
-      - name: IP before VPN (all 3 must succeed)
+      - name: IP before VPN
+        shell: bash
         run: |
-          set -e
+          set -euo pipefail
+          : > reason.txt
           python3 <<'PY'
-          import json, subprocess, sys
+          import subprocess, json, sys, os
 
-          def fetch(cmd):
-            try:
-              out = subprocess.check_output(cmd, shell=True, timeout=10).decode().strip()
-              if not out: raise RuntimeError("empty")
-              return out
-            except Exception:
-              return None
+          def curl(u):
+              try: return subprocess.check_output(f"curl -s {u}", shell=True, timeout=8).decode().strip()
+              except: return None
 
-          ip1 = fetch("curl -s https://ipinfo.io/ip")
-          ip2 = fetch("curl -s https://ifconfig.me")
-          api = fetch("curl -s https://api.myip.com")
+          ip1 = curl("https://ipinfo.io/ip")
+          ip2 = curl("https://ifconfig.me")
+          raw = curl("https://api.myip.com")
 
           print("::group::IP before VPN")
           print(f"{ip1 or '❌'} (ipinfo.io)")
           print(f"{ip2 or '❌'} (ifconfig.me)")
-          print(f"{api or '❌'} (api.myip.com)")
+          print(f"{raw or '❌'} (api.myip.com)")
           print("::endgroup::")
 
-          # rule 3: all three must succeed (ipinfo, ifconfig, api.myip.com JSON)
-          if not ip1 or not ip2 or not api:
-            print("::error ::IP before VPN: at least one source failed")
-            sys.exit(1)
+          api_ip = None
+          if raw:
+              try: api_ip = json.loads(raw).get("ip","").strip() or None
+              except: api_ip = None
 
-          try:
-            apij = json.loads(api)
-            if "ip" not in apij or not apij["ip"]:
-              raise ValueError("api.myip.com has no 'ip'")
-          except Exception:
-            print("::error ::IP before VPN: api.myip.com returned invalid JSON")
-            sys.exit(1)
+          ok = sum(1 for x in (ip1, ip2, api_ip) if x)
+          if ok < 3:
+              failed = [n for n,v in (("ipinfo.io",ip1),("ifconfig.me",ip2),("api.myip.com",api_ip)) if not v]
+              with open("reason.txt","w") as f:
+                  f.write(f"IP before VPN: {3-ok}/3 checks fail")
+              print(f"::error ::IP before VPN: {3-ok}/3 checks fail (failed: {', '.join(failed)})")
+              sys.exit(1)
+
+          with open("ip_before.json","w") as f:
+              json.dump({
+                "best": ip1 or ip2 or api_ip,
+                "ok_count": ok,
+                "failed_sources": [n for n,v in (("ipinfo.io",ip1),("ifconfig.me",ip2),("api.myip.com",api_ip)) if not v]
+              }, f)
           PY
 
       - name: Fetch & build config for ${{ matrix.server_id }}
+        shell: bash
         run: |
-          set -e
+          set -euo pipefail
           python3 <<'PY'
-          import os, sys, time, base64, hmac, hashlib, json, re, urllib.request
+          import os, sys, time, base64, hmac, hashlib, json, urllib.request, subprocess, re
 
-          sid = "${{ matrix.server_id }}"
-          API_URL = f"http://45.77.30.118:8080/get-config?server_id={sid}&is_grand=true"
-          TIMEOUT = int(os.getenv("API_TIMEOUT","10"))
-          RETRIES = int(os.getenv("API_RETRIES","3"))
-          MASTER = os.getenv("MASTER_XOR_SECRET","")
+          SID = "${{ matrix.server_id }}"
+          BASE = (os.getenv("API_BASE_URL") or "").rstrip("/")
+          MASTER = os.getenv("MASTER_XOR_SECRET") or ""
+          URL = f"{BASE}/get-config?server_id={SID}&is_grand=true"
 
-          def derive_key(m,n): return hmac.new(m,n,hashlib.sha256).digest()
-          def xor_cycle(data,k): return bytes([b ^ k[i%len(k)] for i,b in enumerate(data)])
+          def k(m,n): return hmac.new(m,n,hashlib.sha256).digest()
+          def xo(d,kk): return bytes([b ^ kk[i%len(kk)] for i,b in enumerate(d)])
 
-          # rule 2: fail on request/parse/decode error
+          # fetch
           last_err=None
-          for _ in range(RETRIES):
-            try:
-              req=urllib.request.Request(API_URL)
-              with urllib.request.urlopen(req,timeout=TIMEOUT) as r:
-                headers=dict(r.getheaders())
-                body=r.read()
-              break
-            except Exception as e:
-              last_err=e
-              time.sleep(2)
+          for _ in range(3):
+              try:
+                  with urllib.request.urlopen(URL,timeout=10) as r:
+                      hdr=dict(r.getheaders()); body=r.read()
+                  break
+              except Exception as e:
+                  last_err=e; time.sleep(2)
           else:
-            print("::error ::Config API unreachable:",last_err)
-            sys.exit(1)
+              open("reason.txt","w").write(f"Config fetch failed: {last_err}")
+              print(f"::error ::Config API unreachable: {last_err}"); sys.exit(1)
 
-          xenc=headers.get("X-Encrypted") or headers.get("x-encrypted")
-          nonce=headers.get("X-Nonce") or headers.get("x-nonce")
+          xenc = hdr.get("X-Encrypted") or hdr.get("x-encrypted")
+          nonce= hdr.get("X-Nonce") or hdr.get("x-nonce")
+          text = body.decode("utf-8","ignore")
           if xenc=="1" and nonce:
-            if not MASTER:
-              print("::error ::MASTER_XOR_SECRET empty")
-              sys.exit(1)
-            try:
-              body=xor_cycle(base64.b64decode(body),
-                             hmac.new(MASTER.encode(),base64.b64decode(nonce),hashlib.sha256).digest())
-            except Exception as e:
-              print("::error ::Config decrypt error:",e)
-              sys.exit(1)
+              if not MASTER:
+                  open("reason.txt","w").write("Config decrypt: MASTER missing")
+                  print("::error ::MASTER_XOR_SECRET empty"); sys.exit(1)
+              try:
+                  text = xo(base64.b64decode(body), k(MASTER.encode(), base64.b64decode(nonce))).decode("utf-8","ignore")
+              except Exception as e:
+                  open("reason.txt","w").write(f"Config decrypt error: {e}")
+                  print(f"::error ::Config decrypt error: {e}"); sys.exit(1)
 
-          text=body.decode("utf-8","ignore")
-          wg=None
-          json_data=None
-          if "[Interface]" in text:
-            wg=text
-          else:
-            try:
-              j=json.loads(text)
-              json_data=j
-            except Exception:
-              print("::error ::Config API returned non-JSON and not wg config")
-              print(text[:500])
-              sys.exit(1)
+          try:
+              j = json.loads(text)
+          except Exception:
+              open("reason.txt","w").write("Config not JSON")
+              print("::error ::Config not JSON (or invalid)"); print(text[:400]); sys.exit(1)
 
-          if json_data is not None:
-            need = ["private_key","address","server_ip","server_port","server_public_key"]
-            miss = [k for k in need if k not in json_data or not json_data[k]]
-            if miss:
-              print(f"::error ::Config JSON missing fields: {', '.join(miss)}")
-              sys.exit(1)
+          print("::group::Decoded JSON")
+          import json as _j
+          print(_j.dumps(j, indent=2, ensure_ascii=False))
+          print("::endgroup::")
 
-            # build wg0.conf
-            wg="\n".join([
+          need = ["private_key","address","server_ip","server_port","server_public_key"]
+          missing = [k for k in need if k not in j or not j[k]]
+          if missing:
+              open("reason.txt","w").write(f"Config JSON missing keys: {', '.join(missing)}")
+              print(f"::error ::Config JSON missing keys: {', '.join(missing)}"); sys.exit(1)
+
+          wg = "\n".join([
               "[Interface]",
-              f"PrivateKey = {json_data['private_key']}",
-              f"Address = {json_data['address']}",
+              f"PrivateKey = {j['private_key']}",
+              f"Address = {j['address']}",
               "DNS = 1.1.1.1",
               "",
               "[Peer]",
-              f"PublicKey = {json_data['server_public_key']}",
+              f"PublicKey = {j['server_public_key']}",
               "AllowedIPs = 0.0.0.0/0, ::/0",
-              f"Endpoint = {json_data['server_ip']}:{json_data['server_port']}",
-              "PersistentKeepalive = 25"
-            ])
+              f"Endpoint = {j['server_ip']}:{j['server_port']}",
+              "PersistentKeepalive = 25",
+          ])
+          masked = re.sub(r'(?m)^(PrivateKey\\s*=\\s*).+$', r'\\1***', wg)
+          print("::group::wg0.conf"); print(masked); print("::endgroup::")
 
-            # expose server_ip for later checks (rule 8)
-            with open(os.environ["GITHUB_ENV"], "a") as envf:
-              envf.write(f"SERVER_IP_EXPECTED={json_data['server_ip']}\n")
+          open("wg0.conf","w").write(wg)
+          subprocess.check_call(["sudo","mkdir","-p","/etc/wireguard"])
+          subprocess.check_call(["sudo","mv","wg0.conf","/etc/wireguard/wg0.conf"])
+          subprocess.check_call(["sudo","chmod","600","/etc/wireguard/wg0.conf"])
 
-            print("::group::Decoded JSON")
-            print(json.dumps(json_data, indent=2))
-            print("::endgroup::")
-
-          masked = re.sub(r'(?m)^(PrivateKey\s*=\s*).+$', r'\1***', wg)
-          print("::group::wg0.conf")
-          print(masked)
-          print("::endgroup::")
-
-          # write config to /etc
-          os.system('sudo mkdir -p /etc/wireguard')
-          with open("wg0.conf","w") as f: f.write(wg)
-          os.system('sudo mv wg0.conf /etc/wireguard/wg0.conf')
-          os.system('sudo chmod 600 /etc/wireguard/wg0.conf')
+          with open(os.environ["GITHUB_ENV"],"a") as envf:
+              envf.write(f"SERVER_IP_EXPECTED={j['server_ip']}\n")
           PY
 
       - name: Connect VPN
+        shell: bash
         run: |
-          set -e
-          sudo wg-quick up wg0
+          set -euo pipefail
+          sudo wg-quick up wg0 || { echo "wg-quick up failed" > reason.txt; exit 1; }
           sudo wg show
 
-      - name: IP via VPN (3 sources must succeed, equal to each other and to config server_ip)
+      - name: IP via VPN (must match)
+        shell: bash
         run: |
-          set -e
-          echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf >/dev/null
-          sleep 3
+          set -euo pipefail
           python3 <<'PY'
-          import json, subprocess, sys, os, re
-
+          import os, subprocess, json, sys
           exp = os.getenv("SERVER_IP_EXPECTED","").strip()
-          if not exp:
-            print("::error ::Expected server IP missing from env (SERVER_IP_EXPECTED)")
-            sys.exit(1)
 
-          def fetch(cmd):
-            try:
-              out = subprocess.check_output(cmd, shell=True, timeout=10).decode().strip()
-              if not out: raise RuntimeError("empty")
-              return out
-            except Exception:
-              return None
+          def curl(u):
+              try: return subprocess.check_output(f"curl -s {u}", shell=True, timeout=8).decode().strip()
+              except: return None
 
-          ip1 = fetch("curl -s https://ipinfo.io/ip")
-          ip2 = fetch("curl -s https://ifconfig.me")
-          api = fetch("curl -s https://api.myip.com")
+          ip1 = curl("https://ipinfo.io/ip")
+          ip2 = curl("https://ifconfig.me")
+          raw = curl("https://api.myip.com")
+          api_ip = None
+          if raw:
+              try: api_ip = json.loads(raw).get("ip","").strip() or None
+              except: api_ip = None
 
           print("::group::IP via VPN")
           print(f"{ip1 or '❌'} (ipinfo.io)")
           print(f"{ip2 or '❌'} (ifconfig.me)")
-          print(f"{api or '❌'} (api.myip.com)")
+          print(f"{raw or '❌'} (api.myip.com)")
+          print(f"VPN server ip address from config: {exp}")
           print("::endgroup::")
 
-          # rule 6: all three must succeed
-          if not ip1 or not ip2 or not api:
-            print("::error ::IP via VPN: at least one source failed")
-            sys.exit(1)
+          # причины фейла пишем в reason.txt перед выходом
+          def write_reason(s):
+              with open("reason.txt","w") as f: f.write(s)
 
-          # parse api.myip.com
-          try:
-            apij = json.loads(api)
-            ip3 = apij.get("ip","").strip()
-            if not ip3:
-              raise ValueError("missing ip")
-          except Exception:
-            print("::error ::IP via VPN: api.myip.com invalid JSON")
-            sys.exit(1)
+          ok = sum(1 for x in (ip1, ip2, api_ip) if x)
+          if ok < 3:
+              miss = [n for n,v in (("ipinfo.io",ip1),("ifconfig.me",ip2),("api.myip.com",api_ip)) if not v]
+              write_reason(f"IP via VPN: {3-ok}/3 checks fail")
+              print(f"::error ::IP via VPN: {3-ok}/3 checks fail (failed: {', '.join(miss)})")
+              sys.exit(1)
 
-          # rule 7: all equal to each other
-          if not (ip1 == ip2 == ip3):
-            print(f"::error ::IP mismatch across sources: ipinfo={ip1}, ifconfig={ip2}, api.myip.com={ip3}")
-            sys.exit(1)
+          if not (ip1 == ip2 == api_ip):
+              write_reason("IP via VPN: mismatch across sources")
+              print(f"::error ::IP mismatch across sources: {ip1} vs {ip2} vs {api_ip}")
+              sys.exit(1)
 
-          # rule 8: equal to server_ip from config
-          if ip1 != exp:
-            print(f"::error ::VPN IP {ip1} doesn't match server_ip from config {exp}")
-            sys.exit(1)
+          if exp and ip1 != exp:
+              write_reason(f"VPN IP {ip1} != config {exp}")
+              print(f"::error ::VPN IP {ip1} != config {exp}")
+              sys.exit(1)
 
-          print(f"::notice ::VPN IP {ip1} matches config and all sources")
+          with open("ip_after.json","w") as f:
+              json.dump({
+                "best": ip1 or ip2 or api_ip,
+                "ok_count": ok,
+                "failed_sources": [n for n,v in (("ipinfo.io",ip1),("ifconfig.me",ip2),("api.myip.com",api_ip)) if not v]
+              }, f)
           PY
 
-      - name: Ping via VPN (must succeed)
+      - name: Ping via VPN
+        shell: bash
         run: |
-          set -e
-          ping -c 4 1.1.1.1
-          echo "::notice ::Ping successful"
+          set -euo pipefail
+          ping -c 4 1.1.1.1 || { echo "Ping via VPN failed" > reason.txt; exit 1; }
 
-      - name: Disconnect
+      - name: Disconnect VPN
         if: always()
+        shell: bash
+        run: sudo wg-quick down wg0 || true
+
+      - name: Save result JSON for ${{ matrix.server_id }}
+        if: always()
+        shell: bash
         run: |
-          sudo wg-quick down wg0 || true
+          set -euo pipefail
+          python3 <<'PY'
+          import json, os
+          sid = "${{ matrix.server_id }}"
+          def readj(p):
+              try:
+                  with open(p,'r') as f: return json.load(f)
+              except: return {}
+          b = readj("ip_before.json")
+          a = readj("ip_after.json")
+          reason = ""
+          if os.path.exists("reason.txt"):
+              reason = open("reason.txt","r").read().strip()
+          status = "ok" if a.get("best") and not reason else "fail"
+          doc = {
+            "server_id": sid,
+            "status": status,
+            "ip_before_best": b.get("best","") or "",
+            "ip_after_best":  a.get("best","") or "",
+            "before_ok_count": int(b.get("ok_count",0) or 0),
+            "after_ok_count":  int(a.get("ok_count",0) or 0),
+            "before_failed_sources": ", ".join(b.get("failed_sources",[])),
+            "after_failed_sources":  ", ".join(a.get("failed_sources",[])),
+            "reason": reason
+          }
+          open(f"result-{sid}.json","w").write(json.dumps(doc, ensure_ascii=False))
+          PY
+
+      - name: Upload result artifact for ${{ matrix.server_id }}
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: result-${{ matrix.server_id }}
+          path: result-${{ matrix.server_id }}.json
+
+  notify:
+    needs: [fetch-servers, test]
+    runs-on: ubuntu-latest
+    if: always()
+    env:
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: results
+
+      - name: Build summary (Python)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import glob, json
+
+          files = sorted(glob.glob('results/**/result-*.json', recursive=True))
+          if not files:
+              msg = "⚠️ WG Monitor: no per-server results found (artifacts missing)."
+              open("summary.txt","w").write(msg)
+              print(msg)
+              raise SystemExit(0)
+
+          ok = 0; fail = 0; lines = []
+          for i, f in enumerate(files, 1):
+              j = json.load(open(f))
+              sid = j.get("server_id","?")
+              st  = j.get("status","fail")
+              b   = j.get("ip_before_best","") or ""
+              a   = j.get("ip_after_best","") or ""
+              reason = (j.get("reason") or "")
+              r1 = reason.splitlines()
+              reason1 = r1[0] if r1 else ""
+
+              if st == "ok":
+                  ok += 1
+                  lines.append(f"{i}) '{sid}' OK: '{b}' → '{a}'")
+              else:
+                  fail += 1
+                  lines.append(f"{i}) '{sid}' FAIL: '{b}' → '{a}' (reason: {reason1 or 'unknown'})")
+
+          total = ok + fail
+          header = f"✅ WG Monitor: All servers OK ({total})" if fail == 0 else f"⚠️ WG Monitor: Some FAILED — OK({ok}) / FAIL({fail}) = Total({total})"
+          msg = header + "\n\n" + "\n".join(lines)
+          open("summary.txt","w").write(msg)
+          print(msg)
+          PY
+
+      - name: Send Telegram
+        shell: bash
+        run: |
+          set -euo pipefail
+          BOT="${{ env.TELEGRAM_BOT_TOKEN }}"
+          CHAT="${{ env.TELEGRAM_CHAT_ID }}"
+          if [[ -z "$BOT" || -z "$CHAT" ]]; then
+            echo "Telegram secrets missing, skipping."
+            exit 0
+          fi
+          MSG="$(cat summary.txt)"
+          curl -s "https://api.telegram.org/bot${BOT}/sendMessage" \
+            -d "chat_id=${CHAT}" \
+            --data-urlencode "text=${MSG}" >/dev/null || true
