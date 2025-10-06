@@ -1,86 +1,174 @@
-name: WireGuard Test
+name: wireguard-test
 
 on:
-  schedule:
-    - cron: '*/3 * * * *'  # каждые 3 минуты (UTC)
   workflow_dispatch:
+  schedule:
+    - cron: '*/3 * * * *'
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      API_URL: "http://45.77.30.118:8080/get-config?server_id=us01&is_grand=true"
+      API_TIMEOUT: "10"
+      API_RETRIES: "3"
+      MASTER_XOR_SECRET: "oftai-ofgaize"  # для продакшена лучше хранить в Secrets
+
     steps:
-      - name: 🧰 Установка WireGuard
+      - name: Install deps
         run: |
           set -x
           sudo apt update
-          sudo apt install -y wireguard curl
+          sudo apt install -y wireguard curl python3
 
-      - name: 🌐 Проверка интернета ДО VPN
+      - name: Check IP before VPN
         run: |
           set -x
-          echo "::group::IP до VPN"
-          echo "ipinfo.io:"
-          curl https://ipinfo.io/ip || echo "❌"
-          echo ""
-          echo "ifconfig.me:"
-          curl https://ifconfig.me || echo "❌"
-          echo ""
-          echo "api.myip.com:"
-          curl https://api.myip.com || echo "❌"
+          echo "::group::IP before VPN"
+          echo "ipinfo.io:" && curl https://ipinfo.io/ip || echo "❌"
+          echo ; echo "ifconfig.me:" && curl https://ifconfig.me || echo "❌"
+          echo ; echo "api.myip.com:" && curl https://api.myip.com || echo "❌"
           echo "::endgroup::"
-          echo "::notice ::Завершена проверка IP до VPN"
 
-          echo "::group::Ping до VPN-сервера"
-          ping -c 4 45.77.30.118 || echo "❌ Сервер не отвечает на ping (это допустимо)"
-          echo "::endgroup::"
-          echo "::notice ::Завершён ping до VPN"
+      - name: Fetch & decode config (HMAC-SHA256 + XOR -> build wg0.conf)
+        shell: python
+        run: |
+          import os, sys, time, base64, hmac, hashlib, json, re, urllib.request
 
-      - name: 📝 Создание WireGuard конфигурации
+          API_URL = os.getenv("API_URL", "")
+          API_TIMEOUT = int(os.getenv("API_TIMEOUT", "10"))
+          API_RETRIES = int(os.getenv("API_RETRIES", "3"))
+          MASTER = os.getenv("MASTER_XOR_SECRET", "")
+
+          if not API_URL:
+              print("::error ::API_URL is empty")
+              sys.exit(1)
+
+          last_err = None
+          for attempt in range(1, API_RETRIES + 1):
+              try:
+                  req = urllib.request.Request(API_URL, method="GET")
+                  with urllib.request.urlopen(req, timeout=API_TIMEOUT) as resp:
+                      headers = dict(resp.getheaders())
+                      body = resp.read()
+                  break
+              except Exception as e:
+                  last_err = e
+                  time.sleep(2)
+          else:
+              print(f"::error ::API is not reachable after {API_RETRIES} attempts: {last_err}")
+              sys.exit(1)
+
+          xenc = headers.get("X-Encrypted") or headers.get("x-encrypted") or ""
+          nonce_b64 = headers.get("X-Nonce") or headers.get("x-nonce") or ""
+
+          def derive_key(m, n):
+              return hmac.new(m, n, hashlib.sha256).digest()
+
+          def xor_cycle(data, key):
+              k = len(key)
+              return bytes([b ^ key[i % k] for i, b in enumerate(data)])
+
+          plain = body
+          if xenc == "1" and nonce_b64:
+              if not MASTER:
+                  print("::error ::MASTER_XOR_SECRET is empty")
+                  sys.exit(1)
+              try:
+                  cipher = base64.b64decode(body)
+                  nonce = base64.b64decode(nonce_b64)
+              except Exception as e:
+                  print(f"::error ::Invalid base64 in body/nonce: {e}")
+                  sys.exit(1)
+              key = derive_key(MASTER.encode("utf-8"), nonce)
+              plain = xor_cycle(cipher, key)
+
+          text = plain.decode("utf-8", errors="ignore")
+
+          wg_conf = None
+          if "[Interface]" in text:
+              wg_conf = text
+              print("::notice ::Plaintext contains [Interface] -> using as-is")
+          else:
+              # Expecting JSON with fields: private_key, address, server_ip, server_port, server_public_key
+              try:
+                  js = json.loads(text)
+                  print("::group::Decrypted JSON")
+                  print(json.dumps(js, ensure_ascii=False, indent=2))
+                  print("::endgroup::")
+                  need = ["private_key","address","server_ip","server_port","server_public_key"]
+                  missing = [k for k in need if k not in js or not js[k]]
+                  if missing:
+                      print("::error ::Missing fields in JSON: " + ", ".join(missing))
+                      sys.exit(1)
+                  private_key = str(js["private_key"])
+                  address = str(js["address"])
+                  server_ip = str(js["server_ip"])
+                  server_port = str(js["server_port"])
+                  server_public_key = str(js["server_public_key"])
+
+                  wg_lines = [
+                      "[Interface]",
+                      "PrivateKey = " + private_key,
+                      "Address = " + address,
+                      "DNS = 1.1.1.1",
+                      "",
+                      "[Peer]",
+                      "PublicKey = " + server_public_key,
+                      "AllowedIPs = 0.0.0.0/0, ::/0",
+                      "Endpoint = " + server_ip + ":" + server_port,
+                      "PersistentKeepalive = 25",
+                  ]
+                  wg_conf = "\n".join(wg_lines)
+              except Exception:
+                  print("::error ::API response is neither a wg config nor valid JSON")
+                  print(text[:500])
+                  sys.exit(1)
+
+          if not wg_conf:
+              print("::error ::Failed to obtain wg config")
+              sys.exit(1)
+
+          # Preview without leaking PrivateKey
+          safe_conf = re.sub(r"(?m)^\\s*PrivateKey\\s*=.*$", "PrivateKey = ***", wg_conf)
+          print("::group::wg0.conf preview")
+          print(safe_conf[:2000])
+          print("::endgroup::")
+
+          with open("wg0.conf","w") as f:
+              f.write(wg_conf)
+          print("::notice ::wg0.conf written")
+
+      - name: Install wg0.conf to /etc/wireguard
         run: |
           set -x
           sudo mkdir -p /etc/wireguard
-          echo "[Interface]" | sudo tee /etc/wireguard/wg0.conf
-          echo "PrivateKey = UEGiUXR1ektwPZe92APCtlnvZTgnZWnYHuwFgzVyxG8=" | sudo tee -a /etc/wireguard/wg0.conf
-          echo "Address = 10.2.0.39/32" | sudo tee -a /etc/wireguard/wg0.conf
-          echo "DNS = 1.1.1.1" | sudo tee -a /etc/wireguard/wg0.conf
-          echo "" | sudo tee -a /etc/wireguard/wg0.conf
-          echo "[Peer]" | sudo tee -a /etc/wireguard/wg0.conf
-          echo "PublicKey = TXiDvkaNmuwI23L6zPw8DyrKvJQ0k7S0lFbQdO+jpi4=" | sudo tee -a /etc/wireguard/wg0.conf
-          echo "AllowedIPs = 0.0.0.0/0, ::/0" | sudo tee -a /etc/wireguard/wg0.conf
-          echo "Endpoint = 140.82.42.33:51822" | sudo tee -a /etc/wireguard/wg0.conf
-          echo "PersistentKeepalive = 25" | sudo tee -a /etc/wireguard/wg0.conf
+          sudo mv wg0.conf /etc/wireguard/wg0.conf
+          sudo chmod 600 /etc/wireguard/wg0.conf
 
-      - name: 🔌 Подключение к VPN
+      - name: Connect VPN
         run: |
           set -x
           sudo wg-quick up wg0
-          echo "🎯 WireGuard статус:"
           sudo wg show
 
-      - name: 🌍 Проверка интернета ЧЕРЕЗ VPN
+      - name: Check IP through VPN
         run: |
           set -x
           echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf
           sleep 3
-          echo "::group::IP через VPN"
-          echo "ipinfo.io:"
-          curl https://ipinfo.io/ip || echo "❌"
-          echo ""
-          echo "ifconfig.me:"
-          curl https://ifconfig.me || echo "❌"
-          echo ""
-          echo "api.myip.com:"
-          curl https://api.myip.com || echo "❌"
+          echo "::group::IP via VPN"
+          echo "ipinfo.io:" && curl https://ipinfo.io/ip || echo "❌"
+          echo ; echo "ifconfig.me:" && curl https://ifconfig.me || echo "❌"
+          echo ; echo "api.myip.com:" && curl https://api.myip.com || echo "❌"
           echo "::endgroup::"
 
-      - name: ✅ Ping через VPN
+      - name: Ping via VPN
         run: |
           set -x
-          echo "::group::Ping до 1.1.1.1 через VPN"
-          ping -c 4 1.1.1.1 || echo "❌ Ping не прошёл"
-          echo "::endgroup::"
+          ping -c 4 1.1.1.1 || echo "❌ Ping failed"
 
-      - name: 📴 Отключение VPN
+      - name: Disconnect
         if: always()
         run: |
           set -x
