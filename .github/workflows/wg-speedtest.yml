@@ -3,10 +3,10 @@ name: WireGuard Speedtest
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 */6 * * *'  # раз в 6 часов; можешь поменять
+    - cron: '*/30 * * * *'  # каждые 30 минут
 
 jobs:
-  fetch-servers:
+  fetch_servers:
     runs-on: ubuntu-latest
     env:
       API_BASE_URL: ${{ secrets.API_BASE_URL }}
@@ -14,7 +14,7 @@ jobs:
     outputs:
       server_ids: ${{ steps.fetch.outputs.server_ids }}
     steps:
-      - name: Install deps
+      - name: Install base deps
         shell: bash
         run: |
           set -euo pipefail
@@ -61,8 +61,12 @@ jobs:
           txt = plain.decode("utf-8","ignore")
           try:
               data=json.loads(txt)
-          except:
+          except Exception:
               print("::error ::Servers API returned non-JSON"); print(txt[:500]); sys.exit(1)
+
+          print("::group::Расшифрованный список серверов")
+          print(json.dumps(data, ensure_ascii=False, indent=2))
+          print("::endgroup::")
 
           if not isinstance(data,list) or not data:
               print("::error ::Server list empty/invalid"); sys.exit(1)
@@ -76,42 +80,91 @@ jobs:
           PY
 
   speedtest:
-    needs: fetch-servers
+    needs: fetch_servers
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        server_id: ${{ fromJson(needs.fetch-servers.outputs.server_ids) }}
+        server_id: ${{ fromJson(needs.fetch_servers.outputs.server_ids) }}
     env:
       API_BASE_URL: ${{ secrets.API_BASE_URL }}
       MASTER_XOR_SECRET: ${{ secrets.MASTER_XOR_SECRET }}
     steps:
+      - name: Write requirements (for pip cache)
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "speedtest-cli" > requirements.txt
+
       - name: Setup Python (cache pip)
         uses: actions/setup-python@v5
         with:
           python-version: '3.x'
           cache: 'pip'
+          cache-dependency-path: requirements.txt
 
-      - name: Install WireGuard & speedtest
+      - name: Install WireGuard & python speedtest-cli
         shell: bash
         run: |
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends wireguard
           python3 -m pip install --upgrade pip
-          python3 -m pip install speedtest-cli
+          python3 -m pip install -r requirements.txt
 
-      - name: Fetch & apply config for ${{ matrix.server_id }}
+      - name: Install Ookla speedtest (robust)
         shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v speedtest >/dev/null 2>&1; then
+            # 1) Попробуем через репозиторий packagecloud
+            if curl -fsSL https://packagecloud.io/install/repositories/ookla/speedtest-cli/script.deb.sh | sudo bash; then
+              sudo apt-get update || true
+              if sudo apt-get install -y speedtest; then
+                echo "Ookla speedtest installed via apt."
+              else
+                echo "Apt package 'speedtest' not found, falling back to tarball..."
+                FAIL_FALLBACK=1
+              fi
+            else
+              echo "Failed to setup packagecloud repo, falling back to tarball..."
+              FAIL_FALLBACK=1
+            fi
+
+            # 2) Фолбэк: официальный бинарник из tar.gz
+            if [ "${FAIL_FALLBACK:-0}" -eq 1 ]; then
+              ARCH="$(uname -m)"
+              case "$ARCH" in
+                x86_64)  SUF="x86_64" ;;
+                aarch64) SUF="aarch64" ;;
+                arm64)   SUF="aarch64" ;;
+                *)       SUF="x86_64" ;;  # дефолт
+              esac
+              URL="https://install.speedtest.net/app/cli/ookla-speedtest-1.2.0-linux-${SUF}.tgz"
+              TMP="$(mktemp -d)"
+              echo "Downloading ${URL} ..."
+              curl -fsSL "$URL" -o "$TMP/s.tgz"
+              tar -xzf "$TMP/s.tgz" -C "$TMP"
+              sudo mv "$TMP/speedtest" /usr/local/bin/speedtest
+              sudo chmod +x /usr/local/bin/speedtest
+              rm -rf "$TMP"
+              command -v speedtest >/dev/null 2>&1 && echo "Ookla speedtest installed from tarball."
+            fi
+          fi
+
+      - name: Fetch config JSON & write wg0.conf for ${{ matrix.server_id }}
+        shell: bash
+        env:
+          SID: ${{ matrix.server_id }}
         run: |
           set -euo pipefail
           python3 <<'PY'
           import os, sys, time, base64, hmac, hashlib, json, urllib.request, re, subprocess
 
-          SID="${{ matrix.server_id }}"
-          BASE=(os.getenv("API_BASE_URL") or "").rstrip("/")
-          MASTER=os.getenv("MASTER_XOR_SECRET") or ""
-          URL=f"{BASE}/get-config?server_id={SID}&is_grand=true"
+          SID = os.getenv("SID","")
+          BASE = (os.getenv("API_BASE_URL") or "").rstrip("/")
+          MASTER = os.getenv("MASTER_XOR_SECRET") or ""
+          URL = f"{BASE}/get-config?server_id={SID}&is_grand=true"
           TIMEOUT, RETRIES = 10, 3
 
           def k(m,n): return hmac.new(m,n,hashlib.sha256).digest()
@@ -128,46 +181,51 @@ jobs:
           else:
               print(f"::error ::Config API unreachable: {last_err}"); sys.exit(1)
 
-          xenc=hdr.get("X-Encrypted") or hdr.get("x-encrypted")
-          nonce=hdr.get("X-Nonce") or hdr.get("x-nonce")
-          text=body.decode("utf-8","ignore")
+          xenc = hdr.get("X-Encrypted") or hdr.get("x-encrypted")
+          nonce= hdr.get("X-Nonce") or hdr.get("x-nonce")
+          text = body.decode("utf-8","ignore")
           if xenc=="1" and nonce:
-              if not MASTER:
-                  print("::error ::MASTER_XOR_SECRET empty"); sys.exit(1)
+              if not MASTER: print("::error ::MASTER_XOR_SECRET empty"); sys.exit(1)
               try:
-                  text=xo(base64.b64decode(body), k(MASTER.encode(), base64.b64decode(nonce))).decode("utf-8","ignore")
+                  text = xo(base64.b64decode(body), k(MASTER.encode(), base64.b64decode(nonce))).decode("utf-8","ignore")
               except Exception as e:
                   print(f"::error ::Config decrypt error: {e}"); sys.exit(1)
 
           try:
               j=json.loads(text)
-          except:
+          except Exception:
               print("::error ::Config not JSON"); print(text[:400]); sys.exit(1)
 
           need=["private_key","address","server_ip","server_port","server_public_key"]
           if any(k not in j or not j[k] for k in need):
               print("::error ::Config JSON missing keys"); sys.exit(1)
 
-          wg="\n".join([
+          wg_lines = [
               "[Interface]",
-              f"PrivateKey = {j['private_key']}",
-              f"Address = {j['address']}",
+              "PrivateKey = " + j["private_key"],
+              "Address = " + j["address"],
               "DNS = 1.1.1.1",
               "",
               "[Peer]",
-              f"PublicKey = {j['server_public_key']}",
+              "PublicKey = " + j["server_public_key"],
               "AllowedIPs = 0.0.0.0/0, ::/0",
-              f"Endpoint = {j['server_ip']}:{j['server_port']}",
+              "Endpoint = " + j["server_ip"] + ":" + str(j["server_port"]),
               "PersistentKeepalive = 25",
-          ])
+              ""
+          ]
+          wg = "\n".join(wg_lines)
 
-          with open("wg0.conf","w") as f: f.write(wg)
+          with open("wg0.conf","w") as f:
+              f.write(wg)
+
           subprocess.check_call(["sudo","mkdir","-p","/etc/wireguard"])
           subprocess.check_call(["sudo","mv","wg0.conf","/etc/wireguard/wg0.conf"])
           subprocess.check_call(["sudo","chmod","600","/etc/wireguard/wg0.conf"])
 
-          masked=re.sub(r'(?m)^(PrivateKey\\s*=\\s*).+$', r'\\1***', wg)
-          print("::group::wg0.conf"); print(masked); print("::endgroup::")
+          masked = re.sub(r'(?m)^(PrivateKey\s*=\s*).+$', r'\\1***', wg)
+          print("::group::wg0.conf (masked)")
+          print(masked)
+          print("::endgroup::")
           PY
 
       - name: Connect VPN
@@ -177,42 +235,88 @@ jobs:
           sudo wg-quick up wg0
           sudo wg show
 
-      - name: Speedtest via VPN
+      - name: Speedtest via VPN (with fallback)
         shell: bash
+        env:
+          SID: ${{ matrix.server_id }}
         run: |
           set -euo pipefail
+          # небольшой джиттер, чтобы реже ловить блок от speedtest.net
+          sleep $(( (RANDOM % 4) + 1 ))
           python3 <<'PY'
-          import json
+          import os, time, json, subprocess, sys
+          # 1) попытка python speedtest-cli (2 ретрая)
           try:
               import speedtest
+              def run_py():
+                  s = speedtest.Speedtest(timeout=20)
+                  s.get_servers()
+                  s.get_best_server()
+                  down_bps = s.download()
+                  up_bps   = s.upload()
+                  ping_ms  = s.results.ping
+                  return {
+                      "server_id": os.getenv("SID","?"),
+                      "ping_ms": round(float(ping_ms), 2) if ping_ms is not None else None,
+                      "download_Mbps": round(down_bps/1e6, 2),
+                      "upload_Mbps": round(up_bps/1e6, 2),
+                      "source": "python-speedtest-cli"
+                  }
+              last=None
+              for _ in range(2):
+                  try:
+                      out = run_py()
+                      print("::group::Speedtest result (python)")
+                      print(json.dumps(out, indent=2, ensure_ascii=False))
+                      print("::endgroup::")
+                      open("speedtest-result.json","w").write(json.dumps(out, ensure_ascii=False))
+                      sys.exit(0)
+                  except Exception as e:
+                      last=e
+                      time.sleep(2)
+              print(f"::warning ::python speedtest failed, fallback to Ookla CLI: {last}")
           except Exception as e:
-              print(f"::error ::speedtest module not available: {e}")
-              raise SystemExit(1)
+              print(f"::warning ::python speedtest import failed, fallback to Ookla CLI: {e}")
 
-          s = speedtest.Speedtest(timeout=20)
-          s.get_servers()
-          best = s.get_best_server()
-          down_bps = s.download()
-          up_bps   = s.upload()
-          ping_ms  = s.results.ping
-
-          out = {
-            "server_id": "${{ matrix.server_id }}",
-            "ping_ms": round(float(ping_ms), 2) if ping_ms is not None else None,
-            "download_Mbps": round(down_bps/1e6, 2),
-            "upload_Mbps": round(up_bps/1e6, 2),
-            "best_server": {
-              "host": best.get("host"),
-              "name": best.get("name"),
-              "country": best.get("country"),
-              "sponsor": best.get("sponsor")
-            }
-          }
-          print("::group::Speedtest result")
-          print(json.dumps(out, indent=2, ensure_ascii=False))
-          print("::endgroup::")
-          with open("speedtest-result.json","w") as f:
-              json.dump(out, f, ensure_ascii=False)
+          # 2) fallback: официальная утилита Ookla
+          try:
+              r = subprocess.run(
+                  ["speedtest","-f","json","--accept-license","--accept-gdpr"],
+                  check=True, capture_output=True, text=True
+              )
+              j = json.loads(r.stdout)
+              # bandwidth (bytes/sec) -> Mbps
+              def mbps(sec):
+                  try:
+                      return round((sec.get("bandwidth",0) * 8) / 1e6, 2)
+                  except Exception:
+                      return None
+              ping = None
+              try:
+                  ping = round(float(j.get("ping",{}).get("latency", None)), 2)
+              except Exception:
+                  pass
+              out = {
+                  "server_id": os.getenv("SID","?"),
+                  "ping_ms": ping,
+                  "download_Mbps": mbps(j.get("download",{})),
+                  "upload_Mbps": mbps(j.get("upload",{})),
+                  "best_server": {
+                      "host": (j.get("server") or {}).get("host"),
+                      "name": (j.get("server") or {}).get("name"),
+                      "country": (j.get("server") or {}).get("country"),
+                      "sponsor": (j.get("server") or {}).get("sponsor"),
+                  },
+                  "source": "ookla-speedtest"
+              }
+              print("::group::Speedtest result (Ookla)")
+              print(json.dumps(out, indent=2, ensure_ascii=False))
+              print("::endgroup::")
+              open("speedtest-result.json","w").write(json.dumps(out, ensure_ascii=False))
+          except subprocess.CalledProcessError as e:
+              print("::error ::Ookla CLI failed")
+              print(e.stdout); print(e.stderr)
+              sys.exit(1)
           PY
 
       - name: Disconnect VPN
@@ -228,14 +332,15 @@ jobs:
           path: speedtest-result.json
 
   notify:
-    needs: [fetch-servers, speedtest]
+    needs: [fetch_servers, speedtest]
     runs-on: ubuntu-latest
     if: always()
     env:
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
     steps:
-      - uses: actions/download-artifact@v4
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
         with:
           path: results
 
@@ -253,17 +358,18 @@ jobs:
               print(msg)
               raise SystemExit(0)
 
-          lines=[]
-          for i,f in enumerate(files,1):
-              j=json.load(open(f))
-              sid=j.get("server_id","?")
-              ping=j.get("ping_ms")
-              d=j.get("download_Mbps")
-              u=j.get("upload_Mbps")
-              lines.append(f"{i}) '{sid}': ping {ping} ms, ↓ {d} Mb/s, ↑ {u} Mb/s")
+          lines = []
+          for i, f in enumerate(files, 1):
+              j = json.load(open(f))
+              sid = j.get("server_id","?")
+              src = j.get("source","?")
+              ping = j.get("ping_ms")
+              d = j.get("download_Mbps")
+              u = j.get("upload_Mbps")
+              lines.append(f"{i}) '{sid}': ping {ping} ms, ↓ {d} Mb/s, ↑ {u} Mb/s ({src})")
 
-          header="📈 WG Speedtest results"
-          msg=header+"\n\n"+"\n".join(lines)
+          header = "📈 WG Speedtest results"
+          msg = header + "\n\n" + "\n".join(lines)
           open("summary.txt","w").write(msg)
           print(msg)
           PY
