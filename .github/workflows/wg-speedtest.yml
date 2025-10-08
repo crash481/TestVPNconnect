@@ -1,0 +1,284 @@
+name: WireGuard Speedtest
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 */6 * * *'  # раз в 6 часов; можешь поменять
+
+jobs:
+  fetch-servers:
+    runs-on: ubuntu-latest
+    env:
+      API_BASE_URL: ${{ secrets.API_BASE_URL }}
+      MASTER_XOR_SECRET: ${{ secrets.MASTER_XOR_SECRET }}
+    outputs:
+      server_ids: ${{ steps.fetch.outputs.server_ids }}
+    steps:
+      - name: Install deps
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y curl python3
+
+      - name: Fetch server list & decode
+        id: fetch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import os, sys, time, base64, hmac, hashlib, json, urllib.request
+
+          BASE = (os.getenv("API_BASE_URL") or "").rstrip("/")
+          MASTER = os.getenv("MASTER_XOR_SECRET") or ""
+          URL = BASE + "/servers"
+          TIMEOUT, RETRIES = 10, 3
+
+          def k(m,n): return hmac.new(m,n,hashlib.sha256).digest()
+          def xo(d,kk): return bytes([b ^ kk[i%len(kk)] for i,b in enumerate(d)])
+
+          last_err=None
+          for _ in range(RETRIES):
+              try:
+                  with urllib.request.urlopen(URL,timeout=TIMEOUT) as r:
+                      hdr=dict(r.getheaders()); body=r.read()
+                  break
+              except Exception as e:
+                  last_err=e; time.sleep(2)
+          else:
+              print(f"::error ::Servers API not reachable: {last_err}"); sys.exit(1)
+
+          xenc = hdr.get("X-Encrypted") or hdr.get("x-encrypted")
+          nonce= hdr.get("X-Nonce") or hdr.get("x-nonce")
+          plain=body
+          if xenc=="1" and nonce:
+              if not MASTER: print("::error ::MASTER_XOR_SECRET missing"); sys.exit(1)
+              try:
+                  plain = xo(base64.b64decode(body), k(MASTER.encode(), base64.b64decode(nonce)))
+              except Exception as e:
+                  print(f"::error ::Servers API decrypt error: {e}"); sys.exit(1)
+
+          txt = plain.decode("utf-8","ignore")
+          try:
+              data=json.loads(txt)
+          except:
+              print("::error ::Servers API returned non-JSON"); print(txt[:500]); sys.exit(1)
+
+          if not isinstance(data,list) or not data:
+              print("::error ::Server list empty/invalid"); sys.exit(1)
+
+          ids = [s.get("serverId") for s in data if s.get("serverId")]
+          if not ids:
+              print("::error ::No serverId found"); sys.exit(1)
+
+          with open(os.environ["GITHUB_OUTPUT"],"a") as gh:
+              gh.write(f"server_ids={json.dumps(ids)}\n")
+          PY
+
+  speedtest:
+    needs: fetch-servers
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        server_id: ${{ fromJson(needs.fetch-servers.outputs.server_ids) }}
+    env:
+      API_BASE_URL: ${{ secrets.API_BASE_URL }}
+      MASTER_XOR_SECRET: ${{ secrets.MASTER_XOR_SECRET }}
+    steps:
+      - name: Setup Python (cache pip)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+          cache: 'pip'
+
+      - name: Install WireGuard & speedtest
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends wireguard
+          python3 -m pip install --upgrade pip
+          python3 -m pip install speedtest-cli
+
+      - name: Fetch & apply config for ${{ matrix.server_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import os, sys, time, base64, hmac, hashlib, json, urllib.request, re, subprocess
+
+          SID="${{ matrix.server_id }}"
+          BASE=(os.getenv("API_BASE_URL") or "").rstrip("/")
+          MASTER=os.getenv("MASTER_XOR_SECRET") or ""
+          URL=f"{BASE}/get-config?server_id={SID}&is_grand=true"
+          TIMEOUT, RETRIES = 10, 3
+
+          def k(m,n): return hmac.new(m,n,hashlib.sha256).digest()
+          def xo(d,kk): return bytes([b ^ kk[i%len(kk)] for i,b in enumerate(d)])
+
+          last_err=None
+          for _ in range(RETRIES):
+              try:
+                  with urllib.request.urlopen(URL,timeout=TIMEOUT) as r:
+                      hdr=dict(r.getheaders()); body=r.read()
+                  break
+              except Exception as e:
+                  last_err=e; time.sleep(2)
+          else:
+              print(f"::error ::Config API unreachable: {last_err}"); sys.exit(1)
+
+          xenc=hdr.get("X-Encrypted") or hdr.get("x-encrypted")
+          nonce=hdr.get("X-Nonce") or hdr.get("x-nonce")
+          text=body.decode("utf-8","ignore")
+          if xenc=="1" and nonce:
+              if not MASTER:
+                  print("::error ::MASTER_XOR_SECRET empty"); sys.exit(1)
+              try:
+                  text=xo(base64.b64decode(body), k(MASTER.encode(), base64.b64decode(nonce))).decode("utf-8","ignore")
+              except Exception as e:
+                  print(f"::error ::Config decrypt error: {e}"); sys.exit(1)
+
+          try:
+              j=json.loads(text)
+          except:
+              print("::error ::Config not JSON"); print(text[:400]); sys.exit(1)
+
+          need=["private_key","address","server_ip","server_port","server_public_key"]
+          if any(k not in j or not j[k] for k in need):
+              print("::error ::Config JSON missing keys"); sys.exit(1)
+
+          wg="\n".join([
+              "[Interface]",
+              f"PrivateKey = {j['private_key']}",
+              f"Address = {j['address']}",
+              "DNS = 1.1.1.1",
+              "",
+              "[Peer]",
+              f"PublicKey = {j['server_public_key']}",
+              "AllowedIPs = 0.0.0.0/0, ::/0",
+              f"Endpoint = {j['server_ip']}:{j['server_port']}",
+              "PersistentKeepalive = 25",
+          ])
+
+          with open("wg0.conf","w") as f: f.write(wg)
+          subprocess.check_call(["sudo","mkdir","-p","/etc/wireguard"])
+          subprocess.check_call(["sudo","mv","wg0.conf","/etc/wireguard/wg0.conf"])
+          subprocess.check_call(["sudo","chmod","600","/etc/wireguard/wg0.conf"])
+
+          masked=re.sub(r'(?m)^(PrivateKey\\s*=\\s*).+$', r'\\1***', wg)
+          print("::group::wg0.conf"); print(masked); print("::endgroup::")
+          PY
+
+      - name: Connect VPN
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo wg-quick up wg0
+          sudo wg show
+
+      - name: Speedtest via VPN
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import json
+          try:
+              import speedtest
+          except Exception as e:
+              print(f"::error ::speedtest module not available: {e}")
+              raise SystemExit(1)
+
+          s = speedtest.Speedtest(timeout=20)
+          s.get_servers()
+          best = s.get_best_server()
+          down_bps = s.download()
+          up_bps   = s.upload()
+          ping_ms  = s.results.ping
+
+          out = {
+            "server_id": "${{ matrix.server_id }}",
+            "ping_ms": round(float(ping_ms), 2) if ping_ms is not None else None,
+            "download_Mbps": round(down_bps/1e6, 2),
+            "upload_Mbps": round(up_bps/1e6, 2),
+            "best_server": {
+              "host": best.get("host"),
+              "name": best.get("name"),
+              "country": best.get("country"),
+              "sponsor": best.get("sponsor")
+            }
+          }
+          print("::group::Speedtest result")
+          print(json.dumps(out, indent=2, ensure_ascii=False))
+          print("::endgroup::")
+          with open("speedtest-result.json","w") as f:
+              json.dump(out, f, ensure_ascii=False)
+          PY
+
+      - name: Disconnect VPN
+        if: always()
+        shell: bash
+        run: sudo wg-quick down wg0 || true
+
+      - name: Upload speedtest artifact for ${{ matrix.server_id }}
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: speedtest-${{ matrix.server_id }}
+          path: speedtest-result.json
+
+  notify:
+    needs: [fetch-servers, speedtest]
+    runs-on: ubuntu-latest
+    if: always()
+    env:
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: results
+
+      - name: Build speed summary (Python)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import glob, json
+
+          files = sorted(glob.glob('results/**/speedtest-result.json', recursive=True))
+          if not files:
+              msg = "⚠️ WG Speedtest: no results found."
+              open("summary.txt","w").write(msg)
+              print(msg)
+              raise SystemExit(0)
+
+          lines=[]
+          for i,f in enumerate(files,1):
+              j=json.load(open(f))
+              sid=j.get("server_id","?")
+              ping=j.get("ping_ms")
+              d=j.get("download_Mbps")
+              u=j.get("upload_Mbps")
+              lines.append(f"{i}) '{sid}': ping {ping} ms, ↓ {d} Mb/s, ↑ {u} Mb/s")
+
+          header="📈 WG Speedtest results"
+          msg=header+"\n\n"+"\n".join(lines)
+          open("summary.txt","w").write(msg)
+          print(msg)
+          PY
+
+      - name: Send Telegram
+        shell: bash
+        run: |
+          set -euo pipefail
+          BOT="${{ env.TELEGRAM_BOT_TOKEN }}"
+          CHAT="${{ env.TELEGRAM_CHAT_ID }}"
+          if [[ -z "$BOT" || -z "$CHAT" ]]; then
+            echo "Telegram secrets missing, skipping."
+            exit 0
+          fi
+          MSG="$(cat summary.txt)"
+          curl -s "https://api.telegram.org/bot${BOT}/sendMessage" \
+            -d "chat_id=${CHAT}" \
+            --data-urlencode "text=${MSG}" >/dev/null || true
