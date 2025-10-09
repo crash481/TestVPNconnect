@@ -474,11 +474,13 @@ jobs:
             open("summary.txt","w").write(msg); print(msg); raise SystemExit(0)
 
           def brief(d):
-            if not d: return ("n/a", None, None, None)
+            if not d: return ("n/a ❌", None, None, None)
             j = d[1]
             p = j.get("ping_ms")
             dl = j.get("download_Mbps")
             ul = j.get("upload_Mbps")
+            if dl is None and ul is None and p is None:
+              return ("n/a ❌", None, j, p)
             return (f"ping {p} ms, ↓ {dl} Mb/s, ↑ {ul} Mb/s", dl, j, p)
 
           def geo_cc(j):
@@ -502,11 +504,6 @@ jobs:
             g_txt, g_dl, g_j, g_ping = brief(g)
             s_txt, s_dl, s_j, s_ping = brief(s)
 
-            if not g:
-              g_txt += " ❌"
-            if not s:
-              s_txt += " ❌"
-
             if g_dl is not None and g_dl < GRAND_DL_RED: g_txt += " ❌"
             if s_dl is not None and s_dl < BASIC_DL_RED: s_txt += " ❌"
             if g_ping is not None and g_ping > 200: g_txt += " ❌"
@@ -526,8 +523,8 @@ jobs:
               pmtu = (j.get("mtu") or {}).get("pmtu")
               loss = j.get("packet_loss_pct")
               jit  = j.get("jitter_ms")
-              loss_ok = (loss is None) or (loss <= LOSS_BAD)
-              jit_ok  = (jit  is None) or (jit  <= JITTER_BAD)
+              loss_ok = (loss is None) or (loss <= 1.0)
+              jit_ok  = (jit  is None) or (jit  <= 10.0)
               loss_s = "n/a" if loss is None else f"{loss}%"
               jit_s  = "n/a" if jit  is None else f"{jit}ms"
               mtu_s  = str(pmtu) if pmtu else "—"
@@ -574,109 +571,144 @@ jobs:
             --data-urlencode "text=${MSG}" >/dev/null || true
 
   publish_pages:
-    needs: [fetch_servers, speedtest]   # оставляем зависимости ради порядка
-    if: always()                        # ← запускаем даже при частичных фейлах
+    needs: [fetch_servers, speedtest]
+    if: always()     # публикуем сайт даже при частичных фейлах
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout main (для docs/index.html)
+      - name: Checkout repo (for docs/index.html)
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
-      - name: Checkout gh-pages (предыдущий stats.json)
-        uses: actions/checkout@v4
-        with:
-          ref: gh-pages
-          path: prev_site
-          fetch-depth: 1
-        continue-on-error: true         # ветки может ещё не быть на первом запуске
-
-      - name: Download artifacts (что успело собраться)
+      - name: Download artifacts (merge all)
         uses: actions/download-artifact@v4
         with:
           pattern: speedtests-*
           merge-multiple: true
           path: results
-        continue-on-error: true         # если часть матрицы упала — всё равно идём дальше
 
-      - name: Build site (merge prev stats + new points)
+      - name: Try fetch previous stats (from gh-pages)
+        shell: bash
+        env:
+          RAW_URL: "https://raw.githubusercontent.com/${{ github.repository }}/gh-pages/data/stats.json"
+        run: |
+          set -euo pipefail
+          curl -fsSL "$RAW_URL" -o prev-stats.json || echo "{}" > prev-stats.json
+
+      - name: Build site (index.html + data/stats.json; merge history)
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p site
+          mkdir -p site/data
           cp -f docs/index.html site/index.html
           touch site/.nojekyll
 
           python3 <<'PY'
-          import glob, json, os, re, time, hashlib
+          import glob, json, os, re, time
+          KEEP_PER_PROFILE = 500  # лимит истории на (sid, profile)
 
-          # 1) Подтянуть старые points (если раньше публиковали)
-          old_points = []
-          try:
-            with open("prev_site/stats.json","r",encoding="utf-8") as f:
-              j=json.load(f)
-              if isinstance(j.get("points"), list):
-                old_points = j["points"]
-          except Exception:
-            pass
-
-          # 2) Собрать новые points из артефактов этого запуска
           def sid_from_name(p):
-            b=os.path.basename(p)
-            if b.endswith('.json'): b=b[:-5]
-            m=re.match(r'novpn-(.+)$',b)
-            if m: return m.group(1)
-            m=re.match(r'result-(.+?)-(grand|basic)$',b)
-            if m: return m.group(1)
-            return None
+              b=os.path.basename(p)
+              if b.endswith('.json'): b=b[:-5]
+              m=re.match(r'novpn-(.+)$',b)
+              if m: return m.group(1)
+              m=re.match(r'result-(.+?)-(grand|basic)$',b)
+              if m: return m.group(1)
+              return None
 
+          def load_json_safe(path, default=None):
+              try:
+                  with open(path,'r',encoding='utf-8') as f:
+                      return json.load(f)
+              except Exception:
+                  return default
+
+          # ----- load prev points (support both formats) -----
+          prev = load_json_safe('prev-stats.json', {}) or {}
+          prev_points = []
+          if isinstance(prev, dict):
+              if isinstance(prev.get('points'), list):
+                  prev_points = prev['points']
+              else:
+                  # новый формат (по sid) → развернуть в points
+                  for sid, obj in prev.items():
+                      if not isinstance(obj, dict) or sid in ('last','_generated_at'):
+                          continue
+                      ts = obj.get('timestamps') or []
+                      for prof in ('novpn','grand','basic'):
+                          prof_obj = (obj.get(prof) or {})
+                          for i, t in enumerate(ts):
+                              def gv(k):
+                                  arr = prof_obj.get(k) or []
+                                  return arr[i] if i < len(arr) else None
+                              if gv('download') is None and gv('upload') is None and gv('ping') is None:
+                                  continue
+                              prev_points.append({
+                                  "ts": t, "sid": sid, "profile": prof,
+                                  "ping": gv('ping'), "down": gv('download'), "up": gv('upload'),
+                                  "loss": None, "jitter": None, "pmtu": None, "geo": None
+                              })
+
+          # ----- collect new run points -----
           files = sorted(glob.glob('results/**/*.json', recursive=True))
-          by_key = {}  # (sid,kind)->(mtime,path)
+          run_points=[]
           for p in files:
-            try:
-              j = json.load(open(p))
-            except Exception:
-              continue
-            sid = j.get("server_id") or sid_from_name(p)
-            kind = (j.get("kind") or "").lower()
-            if sid and kind in ("novpn","grand","basic"):
-              k=(sid,kind); mt=os.path.getmtime(p)
-              cur=by_key.get(k)
-              if (not cur) or (mt>cur[0]): by_key[k]=(mt,p)
+              j = load_json_safe(p)
+              if not isinstance(j, dict): 
+                  continue
+              sid = j.get("server_id") or sid_from_name(p)
+              prof = (j.get("kind") or "").lower()
+              if not sid or prof not in ("novpn","grand","basic"):
+                  continue
+              t = int(os.path.getmtime(p))*1000
+              run_points.append({
+                  "ts": t,
+                  "sid": sid,
+                  "profile": prof,
+                  "ping": j.get("ping_ms"),
+                  "down": j.get("download_Mbps"),
+                  "up": j.get("upload_Mbps"),
+                  "loss": j.get("packet_loss_pct"),
+                  "jitter": j.get("jitter_ms"),
+                  "pmtu": (j.get("mtu") or {}).get("pmtu"),
+                  "geo": ((j.get("server") or {}).get("cc") or ((j.get("server") or {}).get("country")))
+              })
 
-          new_points = []
-          for (sid,kind),(_,p) in sorted(by_key.items()):
-            j=json.load(open(p))
-            t=int(os.path.getmtime(p))*1000
-            new_points.append({
-              "ts": t,
-              "sid": sid,
-              "profile": kind,
-              "ping": j.get("ping_ms"),
-              "down": j.get("download_Mbps"),
-              "up": j.get("upload_Mbps"),
-              "loss": j.get("packet_loss_pct"),
-              "jitter": j.get("jitter_ms"),
-              "pmtu": (j.get("mtu") or {}).get("pmtu"),
-              "geo": ((j.get("server") or {}).get("cc") or ((j.get("server") or {}).get("country")))
-            })
+          # ----- merge & dedup -----
+          all_points = prev_points + run_points
+          all_points.sort(key=lambda x:(x['sid'], x['profile'], int(x['ts'])))
+          dedup=[]
+          seen=set()
+          for p in all_points:
+              k=(p['sid'], p['profile'], int(p['ts']))
+              if k in seen: 
+                  continue
+              seen.add(k)
+              dedup.append(p)
 
-          # 3) Мердж + дедуп по (ts,sid,profile)
-          def key(p): return (p.get("ts"), p.get("sid"), (p.get("profile") or '').lower())
-          merged = {}
-          for arr in (old_points, new_points):
-            for row in arr:
-              merged[key(row)] = row
-          points = sorted(merged.values(), key=lambda r: (r["ts"], r.get("sid",""), (r.get("profile") or "")))
+          # ограничить историю по (sid, profile)
+          from collections import defaultdict
+          buckets=defaultdict(list)
+          for p in dedup:
+              buckets[(p['sid'], p['profile'])].append(p)
+          limited=[]
+          for (sid,prof), arr in buckets.items():
+              arr.sort(key=lambda x:x['ts'])
+              if len(arr)>KEEP_PER_PROFILE:
+                  arr = arr[-KEEP_PER_PROFILE:]
+              limited.extend(arr)
 
-          os.makedirs("site", exist_ok=True)
-          out = {"points": points, "generated_at": int(time.time()*1000)}
+          out = {"points": limited, "generated_at": int(time.time()*1000)}
+          os.makedirs("site/data", exist_ok=True)
+          with open("site/data/stats.json","w",encoding="utf-8") as f:
+              json.dump(out, f, ensure_ascii=False)
+          # на всякий — дублируем в корень, если вдруг кто-то грузит старым путём
           with open("site/stats.json","w",encoding="utf-8") as f:
-            json.dump(out, f, ensure_ascii=False)
-          print("Merged points:", len(points), " (old:", len(old_points), " + new:", len(new_points), ")")
+              json.dump(out, f, ensure_ascii=False)
+          print("Wrote site/data/stats.json; points:", len(limited))
           PY
 
-          ls -la site
+          ls -la site site/data
 
       - name: Publish to gh-pages (single orphan commit)
         shell: bash
