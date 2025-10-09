@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>WG Speedtest Dashboard (demo)</title>
+  <title>WG Speedtest Dashboard</title>
   <link rel="preconnect" href="https://cdn.jsdelivr.net" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3"></script>
@@ -37,7 +37,7 @@
       border-radius: 10px; padding: 10px 12px; display: flex; align-items: center; gap: 8px;
     }
     .ctrl label { color: var(--muted); font-size: 12px; }
-    select, button, input[type="checkbox"] {
+    select, button, input[type="checkbox"], input[type="number"] {
       background: var(--panel-2); color: var(--text);
       border: 1px solid var(--border); border-radius: 8px;
       padding: 6px 8px; font: inherit;
@@ -75,11 +75,10 @@
     }
     .chart-wrap {
       position: relative;
-      height: 320px;          /* можно 280–360 по вкусу */
+      height: 360px;      /* фиксируем высоту — график не “ползёт” */
       width: 100%;
-      overflow: hidden;       /* на всякий случай */
+      overflow: hidden;
     }
-
     #chart {
       display: block;
       width: 100% !important;
@@ -93,7 +92,7 @@
   </style>
 </head>
 <body>
-  <h1>WG Speedtest Dashboard (demo)</h1>
+  <h1>WG Speedtest Dashboard</h1>
 
   <div class="controls">
     <div class="ctrl">
@@ -110,18 +109,14 @@
     <div class="ctrl">
       <label for="sel-metric">Метрика:</label>
       <select id="sel-metric">
-        <option value="download">Download (Mb/s)</option>
+        <option value="download" selected>Download (Mb/s)</option>
         <option value="upload">Upload (Mb/s)</option>
         <option value="ping">Ping (ms)</option>
       </select>
     </div>
     <div class="ctrl">
-      <label for="sel-window">Окно:</label>
-      <select id="sel-window">
-        <option value="10">последние 10 запусков</option>
-        <option value="20" selected>последние 20 запусков</option>
-        <option value="50">последние 50 запусков</option>
-      </select>
+      <label for="inp-window">Окно (точек):</label>
+      <input id="inp-window" type="number" min="5" max="200" step="1" value="20" style="width:90px" />
     </div>
     <div class="ctrl">
       <label>профили</label>
@@ -158,54 +153,108 @@
       <table id="tbl-last">
         <thead>
           <tr>
-            <th>Сервер</th><th>Профиль</th><th>Ping</th><th>↓ Mb/s</th><th>↑ Mb/s</th>
+            <th>Дата/время</th><th>Сервер</th><th>Профиль</th><th>Ping</th><th>↓ Mb/s</th><th>↑ Mb/s</th>
             <th>Loss%</th><th>Jitter</th><th>PMTU</th><th>Geo</th>
           </tr>
         </thead>
         <tbody></tbody>
       </table>
-      <div class="small" style="margin-top:10px;">Demo – позже подключим stats.json из артефактов Actions.</div>
+      <div class="small" style="margin-top:10px;">Если есть <code>docs/stats.json</code> — подхватим автоматически.</div>
     </div>
   </div>
 
   <div class="small" style="margin-top:16px; text-align:center;">
-    Demo • Chart.js • далее подключим реальные данные
+    Chart.js • демо-данные; позже подключим реальные артефакты
   </div>
 
   <script>
-    // ===== Demo data (позже заменим на fetch('stats.json'))
-    const demoData = {
-      us01: {
-        timestamps: Array.from({length: 20}, (_,i)=>Date.now() - (19-i)*1800_000),
-        novpn:  [11000, 17000, 12500, 14000, 15800, 16800, 12000,  8200, 15500, 16000, 11200, 9800, 13000, 14800, 16000, 12000, 10800, 13400, 15000, 12000],
-        grand:  [  260,   280,   210,   330,   290,   305,   275,   240,   315,   300,   285,   320,   295,   270,   355,   310,   325,   280,   340,   300],
-        basic:  [  7.2,   7.6,   6.9,   7.3,   7.5,   7.4,   7.1,   7.2,   7.4,   7.5,   7.3,   7.2,   7.2,   7.3,   7.5,   7.1,   7.4,   7.4,   7.6,   7.2]
-      },
-      gb01: {
-        timestamps: Array.from({length: 20}, (_,i)=>Date.now() - (19-i)*1800_000),
-        novpn:  [9000, 10000, 8500, 12000, 13000, 16000, 10000,  7800, 9000, 12000, 13000, 10000, 9000, 14000, 15000, 11600,  9800, 14500, 13500, 11200],
-        grand:  [ 320,   360,   300,   340,   390,   420,   310,   280,   330,   410,   360,   300,   290,   400,   420,   380,   330,   360,   350,   340],
-        basic:  [ 7.1,   7.2,   7.0,   7.2,   7.5,   7.1,   7.3,   7.0,   7.2,   7.4,   7.5,   7.2,   7.1,   7.3,   7.5,   7.2,   7.1,   7.2,   7.3,   7.1]
-      },
-      de01: {
-        timestamps: Array.from({length: 20}, (_,i)=>Date.now() - (19-i)*1800_000),
-        novpn:  [10000, 16500, 10500, 13500, 15500, 16800, 12300,  8600, 12500, 14800, 16000, 11000,  9800, 13000, 16600, 12000, 10800, 13400, 15000, 12000],
-        grand:  [ 280,   300,   320,   350,   370,   310,   280,   260,   290,   315,   330,   295,   275,   260,   300,   310,   325,   280,   340,   300],
-        basic:  [ 7.3,   7.1,   7.2,   7.4,   7.5,   7.2,   7.3,   7.0,   7.1,   7.4,   7.5,   7.2,   7.2,   7.3,   7.4,   7.1,   7.4,   7.2,   7.5,   7.2]
-      },
-      last: [
-        { server:'us01', profile:'novpn', ping:8.9, down:465.3,  up:363.1,  loss:0.0, jitter:0.02, pmtu:1500, geo:'US' },
-        { server:'us01', profile:'grand', ping:41.5,down:134.1,  up:158.3,  loss:0.0, jitter:1.10, pmtu:1420, geo:'US' },
-        { server:'us01', profile:'basic', ping:34.8,down:7.5,    up:179.4,  loss:0.0, jitter:0.08, pmtu:1420, geo:'US' },
-        { server:'gb01', profile:'grand', ping:99.3,down:461.4,  up:402.1,  loss:0.0, jitter:0.61, pmtu:1420, geo:'GB' },
-        { server:'de01', profile:'grand', ping:110.7,down:299.4, up:348.5,  loss:0.0, jitter:0.20, pmtu:1420, geo:'DE' },
-      ]
-    };
+    // ===== Попытка загрузить реальные данные.
+    // Ожидаемый формат stats.json (упрощённо):
+    // {
+    //   "<sid>": {
+    //     "timestamps": [ms,...],
+    //     "novpn": { "download":[], "upload":[], "ping":[] },
+    //     "grand": { "download":[], "upload":[], "ping":[] },
+    //     "basic": { "download":[], "upload":[], "ping":[] }
+    //   },
+    //   "last": [
+    //     { ts: 1710000000000, server:"us01", profile:"grand", ping:..., down:..., up:..., loss:..., jitter:..., pmtu:..., geo:"US" },
+    //     ...
+    //   ]
+    // }
+    async function loadStats() {
+      try {
+        const r = await fetch('stats.json?ts=' + Date.now(), { cache: 'no-store' });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const j = await r.json();
+        return j;
+      } catch (e) {
+        return null;
+      }
+    }
+
+    // ===== ДЕМО-данные (если stats.json недоступен)
+    function buildDemo() {
+      const makeTs = () => Array.from({length: 20}, (_,i)=>Date.now() - (19-i)*1800_000);
+      // Небольшие хелперы
+      const gen = (arr) => ({ download:[...arr], upload: arr.map(v=>Math.max(50, Math.round(v*0.6))), ping: arr.map((_,i)=>Math.round(40+Math.random()*150)) });
+      const sv = (d,g,b,ts) => ({ timestamps: ts, novpn: gen(d), grand: gen(g), basic: gen(b) });
+
+      const us_ts = makeTs(), gb_ts = makeTs(), de_ts = makeTs();
+      const nl_ts = makeTs(), se_ts = makeTs(), jp_ts = makeTs();
+
+      const demo = {
+        us01: sv(
+          [11000,17000,12500,14000,15800,16800,12000,8200,15500,16000,11200,9800,13000,14800,16000,12000,10800,13400,15000,12000],
+          [260,280,210,330,290,305,275,240,315,300,285,320,295,270,355,310,325,280,340,300],
+          [7.2,7.6,6.9,7.3,7.5,7.4,7.1,7.2,7.4,7.5,7.3,7.2,7.2,7.3,7.5,7.1,7.4,7.4,7.6,7.2],
+          us_ts
+        ),
+        gb01: sv(
+          [9000,10000,8500,12000,13000,16000,10000,7800,9000,12000,13000,10000,9000,14000,15000,11600,9800,14500,13500,11200],
+          [320,360,300,340,390,420,310,280,330,410,360,300,290,400,420,380,330,360,350,340],
+          [7.1,7.2,7.0,7.2,7.5,7.1,7.3,7.0,7.2,7.4,7.5,7.2,7.1,7.3,7.5,7.2,7.1,7.2,7.3,7.1],
+          gb_ts
+        ),
+        de01: sv(
+          [10000,16500,10500,13500,15500,16800,12300,8600,12500,14800,16000,11000,9800,13000,16600,12000,10800,13400,15000,12000],
+          [280,300,320,350,370,310,280,260,290,315,330,295,275,260,300,310,325,280,340,300],
+          [7.3,7.1,7.2,7.4,7.5,7.2,7.3,7.0,7.1,7.4,7.5,7.2,7.2,7.3,7.4,7.1,7.4,7.2,7.5,7.2],
+          de_ts
+        ),
+        nl01: sv(
+          [9500,12000,9000,13000,14000,15000,11000,9000,9800,12000,13000,11000,9800,13000,14500,11800,10000,14000,15000,13000],
+          [300,290,310,370,380,360,280,270,300,340,360,330,290,310,380,340,330,355,365,345],
+          [7.1,7.2,7.2,7.3,7.4,7.5,7.2,7.3,7.2,7.4,7.5,7.2,7.2,7.3,7.4,7.3,7.2,7.4,7.5,7.3],
+          nl_ts
+        ),
+        se01: sv(
+          [10000,14000,12000,15000,16000,15500,12000,10000,13000,14000,16000,15000,14000,15000,16000,12000,14000,15500,14500,15000],
+          [410,380,360,420,430,410,390,370,360,440,430,425,400,415,430,405,410,395,400,410],
+          [7.0,7.1,7.2,7.3,7.3,7.2,7.2,7.1,7.2,7.4,7.5,7.3,7.2,7.4,7.5,7.3,7.2,7.4,7.4,7.3],
+          se_ts
+        ),
+        jp01: sv(
+          [10500,15000,9800,13000,15500,15000,12000,11000,10000,12500,14000,15000,12000,11000,14500,15000,12000,13000,14000,13500],
+          [350,360,300,320,330,340,310,305,295,310,330,335,340,320,325,315,300,320,345,335],
+          [7.2,7.3,7.2,7.3,7.4,7.4,7.2,7.1,7.2,7.3,7.4,7.3,7.2,7.3,7.4,7.3,7.2,7.2,7.3,7.3],
+          jp_ts
+        ),
+        last: [
+          { ts: Date.now()-120000, server:'us01', profile:'novpn', ping:8.9, down:465.3,  up:363.1,  loss:0.0, jitter:0.02, pmtu:1500, geo:'US' },
+          { ts: Date.now()-110000, server:'us01', profile:'grand', ping:41.5,down:334.1,  up:258.3,  loss:0.0, jitter:1.10, pmtu:1420, geo:'US' },
+          { ts: Date.now()-100000, server:'us01', profile:'basic', ping:34.8,down:7.5,    up:179.4,  loss:0.0, jitter:0.08, pmtu:1420, geo:'US' },
+          { ts: Date.now()- 90000, server:'gb01', profile:'grand', ping:99.3,down:461.4,  up:402.1,  loss:0.0, jitter:0.61, pmtu:1420, geo:'GB' },
+          { ts: Date.now()- 80000, server:'de01', profile:'grand', ping:110.7,down:299.4, up:348.5,  loss:0.0, jitter:0.20, pmtu:1420, geo:'DE' },
+        ]
+      };
+      return demo;
+    }
 
     // ===== UI state
     const elServer  = document.getElementById('sel-server');
     const elMetric  = document.getElementById('sel-metric');
-    const elWindow  = document.getElementById('sel-window');
+    const elWindow  = document.getElementById('inp-window');
     const elChkNov  = document.getElementById('chk-novpn');
     const elChkGr   = document.getElementById('chk-grand');
     const elChkBs   = document.getElementById('chk-basic');
@@ -224,9 +273,9 @@
     };
 
     // novpn не участвует в расчёте масштаба Y (можно включить при желании)
-    const INCLUDE_NOVPN_IN_SCALE = false; // NEW
+    const INCLUDE_NOVPN_IN_SCALE = false;
 
-    // ===== Chart init
+    // ===== Chart init (один canvas, фикс. высота)
     const ctx = document.getElementById('chart').getContext('2d');
     const chart = new Chart(ctx, {
       type: 'line',
@@ -240,7 +289,7 @@
         scales: {
           x: {
             type: 'time',
-            time: { unit: 'minute', tooltipFormat: 'yyyy-MM-dd HH:mm' },
+            time: { tooltipFormat: 'yyyy-MM-dd HH:mm' },
             ticks: { color: '#9fb3c8' }, grid: { color: '#1f2a3a' }
           },
           y: {
@@ -251,7 +300,7 @@
           legend: { display: false },
           tooltip: {
             callbacks: {
-              label: ctx => `${ctx.dataset.label}: ${ctx.formattedValue}`
+              label: c => `${c.dataset.label}: ${c.formattedValue}`
             }
           }
         },
@@ -259,7 +308,7 @@
       }
     });
 
-    // Horizontal threshold lines plugin (для download/ping)
+    // Пороговые линии
     const TH = { grandDL: 100, basicDL: 5, pingRed: 200 };
     Chart.register({
       id: 'thresholds',
@@ -270,30 +319,28 @@
         ctx.save();
         ctx.setLineDash([6,6]);
         ctx.lineWidth = 1;
-        ctx.font = '12px system-ui';
-        ctx.fillStyle = '#9fb3c8';
 
-        if (metric === 'download') {
-          drawH(TH.grandDL, '#5AD8A6');
-          drawH(TH.basicDL, '#F6BD16');
-        }
-        if (metric === 'ping') {
-          drawH(TH.pingRed, '#ff5d5d');
-        }
-        ctx.restore();
-
-        function drawH(val, color) {
+        function drawLine(val, color) {
           const yPos = y.getPixelForValue(val);
           if (yPos < top || yPos > bottom) return;
           ctx.strokeStyle = color;
           ctx.beginPath(); ctx.moveTo(left, yPos); ctx.lineTo(right, yPos); ctx.stroke();
         }
+
+        if (metric === 'download') {
+          drawLine(TH.grandDL, '#5AD8A6');
+          drawLine(TH.basicDL, '#F6BD16');
+        }
+        if (metric === 'ping') {
+          drawLine(TH.pingRed, '#ff5d5d');
+        }
+        ctx.restore();
       }
     });
 
-    function fmtNumber(v) {
+    function fmtNumber(v, digits=0) {
       if (v == null || isNaN(v)) return '—';
-      return Number(v).toLocaleString('ru-RU');
+      return Number(v).toLocaleString('ru-RU', { maximumFractionDigits: digits });
     }
     function chip(label, value) {
       const span = document.createElement('span');
@@ -301,51 +348,70 @@
       span.textContent = `${label}: ${value}`;
       return span;
     }
-    function buildDatasets(data) {
+
+    function buildDatasets(data, metric) {
+      const pick = (p) => (data[p] && data[p][metric]) ? data[p][metric] : [];
       const ds = [];
-      if (seriesVisibility.novpn && data.novpn) {
+      if (seriesVisibility.novpn) {
         ds.push({ label: 'novpn', borderColor: colors.novpn, tension: 0.25,
-          data: data.novpn.map(v => v), hidden: !seriesVisibility.novpn });
+          data: pick('novpn'), hidden: !seriesVisibility.novpn });
       }
-      if (seriesVisibility.grand && data.grand) {
+      if (seriesVisibility.grand) {
         ds.push({ label: 'grand', borderColor: colors.grand, tension: 0.25,
-          data: data.grand.map(v => v) });
+          data: pick('grand') });
       }
-      if (seriesVisibility.basic && data.basic) {
+      if (seriesVisibility.basic) {
         ds.push({ label: 'basic', borderColor: colors.basic, tension: 0.25,
-          data: data.basic.map(v => v) });
+          data: pick('basic') });
       }
       return ds;
     }
 
     function updateChart() {
       const sid = elServer.value;
-      const metric = elMetric.value;  // download / upload / ping (в демо у нас download)
-      const win = parseInt(elWindow.value, 10);
+      const metric = elMetric.value;  // download / upload / ping
+      const win = Math.min(200, Math.max(5, parseInt(elWindow.value, 10) || 20));
+      elWindow.value = String(win);
+
       seriesVisibility.novpn = elChkNov.checked;
       seriesVisibility.grand = elChkGr.checked;
       seriesVisibility.basic = elChkBs.checked;
 
-      const src = demoData[sid] || demoData.us01;
-      const idx0 = Math.max(0, (src.timestamps?.length || 0) - win);
+      const src = (window.appData && window.appData[sid]) || (window.appData && window.appData.us01);
+      if (!src) return;
 
+      const total = (src.timestamps?.length || 0);
+      const idx0 = Math.max(0, total - win);
+
+      const slice = (arr) => (arr || []).slice(idx0);
       const base = {
-        timestamps: (src.timestamps || []).slice(idx0),
-        novpn: (src.novpn || []).slice(idx0),
-        grand: (src.grand || []).slice(idx0),
-        basic: (src.basic || []).slice(idx0)
+        timestamps: slice(src.timestamps),
+        novpn: {
+          download: slice(src.novpn?.download),
+          upload  : slice(src.novpn?.upload),
+          ping    : slice(src.novpn?.ping),
+        },
+        grand: {
+          download: slice(src.grand?.download),
+          upload  : slice(src.grand?.upload),
+          ping    : slice(src.grand?.ping),
+        },
+        basic: {
+          download: slice(src.basic?.download),
+          upload  : slice(src.basic?.upload),
+          ping    : slice(src.basic?.ping),
+        }
       };
 
-      // перезаписываем данные (без накопления)
       chart.data.labels = base.timestamps.map(ts => new Date(ts));
-      chart.data.datasets = buildDatasets(base);
+      chart.data.datasets = buildDatasets(base, metric);
 
-      // ===== NEW: аккуратный авто-масштаб по видимым рядам (без novpn по умолчанию)
+      // Автомасштаб по видимым профилям; novpn можно исключать
       const pool = [];
-      if (seriesVisibility.grand) pool.push(...base.grand.filter(Number.isFinite));
-      if (seriesVisibility.basic) pool.push(...base.basic.filter(Number.isFinite));
+      if (seriesVisibility.grand) pool.push(...(base.grand[metric] || []).filter(Number.isFinite));
+      if (seriesVisibility.basic) pool.push(...(base.basic[metric] || []).filter(Number.isFinite));
       if (INCLUDE_NOVPN_IN_SCALE && seriesVisibility.novpn) {
-        pool.push(...base.novpn.filter(Number.isFinite));
+        pool.push(...(base.novpn[metric] || []).filter(Number.isFinite));
       }
       const yMax = Math.max(1, ...pool);
       const pad = yMax < 20 ? 5 : yMax * 0.10;
@@ -354,29 +420,37 @@
 
       chart.update('none');
 
-      // резюме под графиком
+      // Резюме под графиком
       elChips.innerHTML = '';
       const lastIdx = base.timestamps.length - 1;
-      const nov = base.novpn[lastIdx], gr = base.grand[lastIdx], bs = base.basic[lastIdx];
-      if (seriesVisibility.novpn && nov != null) elChips.appendChild(chip('novpn', `${fmtNumber(nov)} Mb/s`));
-      if (seriesVisibility.grand && gr != null)  elChips.appendChild(chip('grand', `${fmtNumber(gr)} Mb/s`));
-      if (seriesVisibility.basic && bs != null)  elChips.appendChild(chip('basic', `${fmtNumber(bs)} Mb/s`));
+      const pickLast = (p) => (base[p] && base[p][metric]) ? base[p][metric][lastIdx] : null;
+      const unit = metric === 'ping' ? 'ms' : 'Mb/s';
+      const nov = pickLast('novpn'), gr = pickLast('grand'), bs = pickLast('basic');
+      if (seriesVisibility.novpn && nov != null) elChips.appendChild(chip('novpn', `${fmtNumber(nov)} ${unit}`));
+      if (seriesVisibility.grand && gr != null)  elChips.appendChild(chip('grand', `${fmtNumber(gr)} ${unit}`));
+      if (seriesVisibility.basic && bs != null)  elChips.appendChild(chip('basic', `${fmtNumber(bs)} ${unit}`));
       elChips.appendChild(chip('точек', String(base.timestamps.length)));
     }
 
     function renderLastTable() {
-      const rows = (demoData.last || []);
+      const rows = (window.appData && window.appData.last) || [];
       const tbody = elTBody; tbody.innerHTML = '';
       if (!rows.length) return;
 
+      const fmtDT = ts => {
+        try { return new Date(ts).toLocaleString('ru-RU'); }
+        catch { return '—'; }
+      };
+
       for (const r of rows) {
         const tr = document.createElement('tr');
-        const lossBad = typeof r.loss === 'number' && r.loss > 1.0;
+        const lossBad   = typeof r.loss   === 'number' && r.loss   > 1.0;
         const jitterBad = typeof r.jitter === 'number' && r.jitter > 10;
-        const pingBad = typeof r.ping === 'number' && r.ping > 200;
-        const mtugood = (r.pmtu || 0) >= 1400;
+        const pingBad   = typeof r.ping   === 'number' && r.ping   > 200;
+        const mtuGood   = (r.pmtu || 0) >= 1400;
 
         tr.innerHTML = `
+          <td>${fmtDT(r.ts)}</td>
           <td>${r.server}</td>
           <td><span class="pill">${r.profile}</span></td>
           <td class="${pingBad?'bad':''}">${r.ping ?? '—'}</td>
@@ -384,15 +458,18 @@
           <td>${r.up ?? '—'}</td>
           <td class="${lossBad?'bad':'ok'}">${r.loss ?? '—'}</td>
           <td class="${jitterBad?'bad':'ok'}">${r.jitter ?? '—'}</td>
-          <td class="${mtugood?'ok':'bad'}">${r.pmtu ?? '—'}</td>
+          <td class="${mtuGood?'ok':'bad'}">${r.pmtu ?? '—'}</td>
           <td>${r.geo ?? ''}</td>
         `;
         tbody.appendChild(tr);
       }
     }
 
-    // events
-    elBtn.addEventListener('click', updateChart);
+    // События
+    document.getElementById('btn-refresh').addEventListener('click', () => {
+      updateChart();
+      renderLastTable();
+    });
     elServer.addEventListener('change', updateChart);
     elMetric.addEventListener('change', updateChart);
     elWindow.addEventListener('change', updateChart);
@@ -400,9 +477,14 @@
     elChkGr.addEventListener('change', updateChart);
     elChkBs.addEventListener('change', updateChart);
 
-    // first paint
-    renderLastTable();
-    updateChart();
+    // Загрузка данных: реальные (stats.json) -> демо
+    (async function init() {
+      const real = await loadStats();
+      window.appData = real || buildDemo();
+      // первый рендер
+      renderLastTable();
+      updateChart();
+    })();
   </script>
 </body>
 </html>
