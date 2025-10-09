@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>WG Speedtest Dashboard (demo)</title>
+<link rel="preconnect" href="https://cdn.jsdelivr.net"/>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3"></script>
+<style>
+  :root { --bg:#0b1020; --fg:#e9eef8; --muted:#9fb2c8; --card:#121a32; --accent:#5dd0ff; --grid:#23314e; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--fg); font:14px/1.4 system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, sans-serif; }
+  header { padding:18px 20px; border-bottom:1px solid var(--grid); position:sticky; top:0; background:linear-gradient(180deg, rgba(11,16,32,.98), rgba(11,16,32,.92)); backdrop-filter:saturate(140%) blur(6px); z-index:10;}
+  header h1 { margin:0; font-size:18px; }
+  .wrap { max-width:1200px; margin:0 auto; padding:18px; }
+  .controls { display:flex; gap:12px; flex-wrap:wrap; margin:12px 0 18px; }
+  .controls .card { background:var(--card); border:1px solid var(--grid); border-radius:12px; padding:10px 12px; display:flex; align-items:center; gap:8px; }
+  select,input,button { background:#0e162c; color:var(--fg); border:1px solid var(--grid); border-radius:10px; padding:8px 10px; }
+  button { cursor:pointer; }
+  .grid { display:grid; grid-template-columns: 1.2fr .8fr; gap:18px; align-items:start; }
+  .panel { background:var(--card); border:1px solid var(--grid); border-radius:14px; padding:14px; }
+  .panel h3 { margin:0 0 10px; font-size:14px; color:var(--muted); letter-spacing:.3px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th, td { border-bottom:1px solid var(--grid); padding:8px; text-align:left; }
+  tr:last-child td { border-bottom:none; }
+  .pill { padding:2px 8px; border-radius:999px; font-size:12px; border:1px solid var(--grid); color:var(--muted); }
+  .ok{ color:#78ffb3; } .bad{ color:#ff7b9e; }
+  .kpi { display:flex; gap:12px; flex-wrap:wrap; margin:8px 0 0; }
+  .kpi .card { background:#0e162c; border:1px solid var(--grid); border-radius:10px; padding:8px 10px; }
+  .legend { display:flex; gap:8px; flex-wrap:wrap; margin:8px 0; color:var(--muted); font-size:12px; }
+  footer { color:var(--muted); opacity:.8; padding:18px; text-align:center; }
+  .help { color:var(--muted); font-size:12px; margin-top:6px; }
+</style>
+</head>
+<body>
+<header class="wrap">
+  <h1>WG Speedtest Dashboard (demo)</h1>
+  <div class="controls">
+    <div class="card">Сервер:
+      <select id="serverSel"></select>
+    </div>
+    <div class="card">Метрика:
+      <select id="metricSel">
+        <option value="download_Mbps">Download (Mb/s)</option>
+        <option value="upload_Mbps">Upload (Mb/s)</option>
+        <option value="ping_ms">Ping (ms)</option>
+      </select>
+    </div>
+    <div class="card">Окно:
+      <select id="windowSel">
+        <option value="20">последние 20 запусков</option>
+        <option value="50">последние 50 запусков</option>
+        <option value="all">все</option>
+      </select>
+    </div>
+    <button id="refreshBtn">Обновить</button>
+    <span class="pill">novpn / grand / basic</span>
+  </div>
+</header>
+
+<div class="wrap grid">
+  <div class="panel">
+    <h3>Тайм-серия</h3>
+    <div class="legend">
+      <span>▮ novpn</span> <span>▮ grand</span> <span>▮ basic</span>
+    </div>
+    <canvas id="chart" height="160"></canvas>
+    <div class="kpi" id="kpiBox"></div>
+    <div class="help">Пороговые линии: grand↓ &lt; 100 Mb/s, basic↓ &lt; 5 Mb/s, ping &gt; 200 ms.</div>
+  </div>
+
+  <div class="panel">
+    <h3>Последние значения</h3>
+    <table id="lastTbl">
+      <thead><tr>
+        <th>Сервер</th><th>Профиль</th><th>Ping</th><th>↓ Mb/s</th><th>↑ Mb/s</th><th>Loss%</th><th>Jitter</th><th>PMTU</th><th>Geo</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</div>
+
+<footer>Demo • Chart.js • позже будем читать реальные артефакты</footer>
+
+<script>
+/* ===== DEMO DATA (имитирует историю артефактов) =====
+   Формат точек: { ts, kind, server_id, ping_ms, download_Mbps, upload_Mbps, packet_loss_pct, jitter_ms, mtu:{pmtu}, server:{country} }
+*/
+const DEMO = (() => {
+  const sids = ["us01","gb01","de01","nl01","se01","jp01"];
+  const kinds = ["novpn","grand","basic"];
+  const cc = {US:"United States", GB:"United Kingdom", DE:"Germany", NL:"Netherlands", SE:"Sweden", JP:"Japan"};
+  const rng = (a,b)=> a + Math.random()*(b-a);
+  const now = Date.now();
+  const points = [];
+  for (let i=29;i>=0;i--) {
+    const ts = now - i*60*60*1000; // шаг=час
+    for (const sid of sids) {
+      // novpn (быстро)
+      points.push({
+        ts, kind:"novpn", server_id:sid,
+        ping_ms: +rng(1,12).toFixed(2),
+        download_Mbps: +rng(6000,18000).toFixed(2),
+        upload_Mbps: +rng(3000,12000).toFixed(2),
+        packet_loss_pct: 0,
+        jitter_ms: +rng(0.02,0.8).toFixed(2),
+        mtu:{pmtu:1500},
+        server:{country:"United States"}
+      });
+      // grand
+      points.push({
+        ts, kind:"grand", server_id:sid,
+        ping_ms: +rng(25,180).toFixed(2),
+        download_Mbps: +rng(120,500).toFixed(2),
+        upload_Mbps: +rng(120,400).toFixed(2),
+        packet_loss_pct: +(Math.random()<.05 ? rng(0.5,2.0).toFixed(2) : 0),
+        jitter_ms: +rng(0.05,6.0).toFixed(2),
+        mtu:{pmtu:1420},
+        server:{country: cc[sid.slice(0,2).toUpperCase()] || "United States"}
+      });
+      // basic (≈8 Mb/s)
+      points.push({
+        ts, kind:"basic", server_id:sid,
+        ping_ms: +rng(20,200).toFixed(2),
+        download_Mbps: +rng(5.8,8.5).toFixed(2),
+        upload_Mbps: +rng(150,400).toFixed(2),
+        packet_loss_pct: 0,
+        jitter_ms: +rng(0.05,3.5).toFixed(2),
+        mtu:{pmtu:1420},
+        server:{country: cc[sid.slice(0,2).toUpperCase()] || "United States"}
+      });
+    }
+  }
+  return points.sort((a,b)=>a.ts-b.ts);
+})();
+
+/* ===== helpers ===== */
+const toCC = (name="") => {
+  const map = {"United States":"US","USA":"US","United Kingdom":"GB","Great Britain":"GB","UK":"GB","Germany":"DE","Netherlands":"NL","Sweden":"SE","Japan":"JP","France":"FR","Canada":"CA","Italy":"IT","Spain":"ES","Poland":"PL","Finland":"FI","Norway":"NO","Denmark":"DK"};
+  name = (name||"").trim();
+  if (map[name]) return map[name];
+  const up = name.toUpperCase().replace(/[^A-Z ]/g,"").split(/\s+/).filter(Boolean);
+  return up.length ? (up[0][0] + (up[1]?.[0]||"")) : "";
+};
+const fmt = (x, unit="") => (x==null || Number.isNaN(x)) ? "n/a" : `${x}${unit}`;
+const lastBy = (arr, fn) => [...arr].reverse().find(fn);
+const uniq = a => [...new Set(a)];
+const fmtDate = ts => new Date(ts).toLocaleString();
+
+/* ===== UI wiring ===== */
+const serverSel = document.getElementById('serverSel');
+const metricSel = document.getElementById('metricSel');
+const windowSel = document.getElementById('windowSel');
+const refreshBtn= document.getElementById('refreshBtn');
+const kpiBox    = document.getElementById('kpiBox');
+const lastTblT  = document.querySelector('#lastTbl tbody');
+
+const SERVERS = uniq(DEMO.map(r=>r.server_id));
+serverSel.innerHTML = SERVERS.map(s=>`<option value="${s}">${s}</option>`).join("");
+
+let chart;
+const mkDataset = (label, data, color) => ({
+  label, data, borderColor: color, backgroundColor: color+'33',
+  pointRadius: 2, borderWidth: 2, fill: false, tension: .25
+});
+
+const COLORS = { novpn:'#6dd3ff', grand:'#8ef5a2', basic:'#ffb86b' };
+
+function rebuild() {
+  const sid = serverSel.value;
+  const metric = metricSel.value; // "download_Mbps" | "upload_Mbps" | "ping_ms"
+  const limit = windowSel.value;
+
+  const all = DEMO.filter(r=>r.server_id===sid);
+  const byKind = k => all.filter(r=>r.kind===k);
+  const windowed = arr => {
+    if (limit==='all') return arr;
+    const n = +limit;
+    return arr.slice(-n);
+  };
+
+  const novpn = windowed(byKind('novpn'));
+  const grand = windowed(byKind('grand'));
+  const basic = windowed(byKind('basic'));
+
+  // build chart data
+  const labels = uniq([...novpn, ...grand, ...basic].map(r=>fmtDate(r.ts)));
+
+  const mapToSeries = (rows) => {
+    const m = new Map(rows.map(r=>[fmtDate(r.ts), r[metric] ?? null]));
+    return labels.map(x=> m.get(x) ?? null);
+  };
+
+  const cfg = {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        mkDataset('novpn', mapToSeries(novpn), COLORS.novpn),
+        mkDataset('grand', mapToSeries(grand), COLORS.grand),
+        mkDataset('basic', mapToSeries(basic), COLORS.basic),
+      ]
+    },
+    options: {
+      responsive: true,
+      scales: {
+        x: { grid:{ color:'#1e2a46' }, ticks:{ color:'#9fb2c8', maxRotation:0, autoSkip:true } },
+        y: { grid:{ color:'#1e2a46' }, ticks:{ color:'#9fb2c8' } }
+      },
+      plugins: {
+        legend: { labels:{ color:'#cfe0f5' } },
+        tooltip: { callbacks:{
+          label: ctx => `${ctx.dataset.label}: ${fmt(ctx.parsed.y)}`
+        }}
+      }
+    }
+  };
+
+  const ctx = document.getElementById('chart').getContext('2d');
+  if (chart) chart.destroy();
+  chart = new Chart(ctx, cfg);
+
+  // KPIs — последние значения
+  const lastN = lastBy(novpn, _=>true);
+  const lastG = lastBy(grand, _=>true);
+  const lastB = lastBy(basic, _=>true);
+  kpiBox.innerHTML = `
+    <div class="card">novpn: ${metric==='ping_ms' ? fmt(lastN?.ping_ms,' ms'): fmt(lastN?.[metric],' Mb/s')}</div>
+    <div class="card">grand: ${metric==='ping_ms' ? fmt(lastG?.ping_ms,' ms'): fmt(lastG?.[metric],' Mb/s')}</div>
+    <div class="card">basic: ${metric==='ping_ms' ? fmt(lastB?.ping_ms,' ms'): fmt(lastB?.[metric],' Mb/s')}</div>
+    <div class="card">точек: ${labels.length}</div>
+  `;
+
+  // таблица последних значений по всем серверам
+  const lastRows = SERVERS.map(S => {
+    const rows = DEMO.filter(r=>r.server_id===S);
+    const pick = kind => lastBy(rows, r=>r.kind===kind);
+    const N=pick('novpn'), G=pick('grand'), B=pick('basic');
+    const cell = j => (!j) ? ['n/a','n/a','n/a','n/a','n/a','n/a','n/a'] :
+      [fmt(j.ping_ms,' ms'), fmt(j.download_Mbps), fmt(j.upload_Mbps),
+       j.packet_loss_pct==null?'n/a':j.packet_loss_pct+'%',
+       fmt(j.jitter_ms,' ms'), (j.mtu?.pmtu ?? '—'), toCC(j.server?.country)];
+    return { sid:S, N:cell(N), G:cell(G), B:cell(B) };
+  });
+
+  const mk = (label, arr) => `<tr><td>${label.sid}</td><td>novpn</td><td>${arr.N[0]}</td><td>${arr.N[1]}</td><td>${arr.N[2]}</td><td>${arr.N[3]}</td><td>${arr.N[4]}</td><td>${arr.N[5]}</td><td>${arr.N[6]}</td></tr>
+<tr><td></td><td>grand</td><td>${arr.G[0]}</td><td>${arr.G[1]}</td><td>${arr.G[2]}</td><td>${arr.G[3]}</td><td>${arr.G[4]}</td><td>${arr.G[5]}</td><td>${arr.G[6]}</td></tr>
+<tr><td></td><td>basic</td><td>${arr.B[0]}</td><td>${arr.B[1]}</td><td>${arr.B[2]}</td><td>${arr.B[3]}</td><td>${arr.B[4]}</td><td>${arr.B[5]}</td><td>${arr.B[6]}</td></tr>`;
+  lastTblT.innerHTML = lastRows.map(mk).join("");
+}
+
+refreshBtn.onclick = rebuild;
+serverSel.onchange = rebuild;
+metricSel.onchange = rebuild;
+windowSel.onchange = rebuild;
+
+// init
+serverSel.value = SERVERS[0];
+rebuild();
+</script>
+</body>
+</html>
