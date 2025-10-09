@@ -9,102 +9,50 @@
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3"></script>
   <style>
     :root {
-      --bg: #0f1620;
-      --panel: #151e2a;
-      --panel-2: #1b2635;
-      --text: #e6edf3;
-      --muted: #9fb3c8;
-      --ok: #17d47b;
-      --warn: #f5a524;
-      --bad: #ff5d5d;
-      --border: #263244;
-      --chip: #202b3a;
+      --bg: #0f1620; --panel: #151e2a; --panel-2: #1b2635; --text: #e6edf3;
+      --muted: #9fb3c8; --ok: #17d47b; --warn: #f5a524; --bad: #ff5d5d;
+      --border: #263244; --chip: #202b3a;
     }
     * { box-sizing: border-box; }
-    body {
-      margin: 0; padding: 22px;
-      background: var(--bg);
-      color: var(--text);
-      font: 14px/1.45 system-ui, -apple-system, Segoe UI, Roboto, Inter, Arial, sans-serif;
-    }
-    h1 { margin: 0 0 14px; font-size: 22px; }
-    .controls {
-      display: flex; flex-wrap: wrap; gap: 12px;
-      margin: 8px 0 18px;
-    }
-    .ctrl {
-      background: var(--panel); border: 1px solid var(--border);
-      border-radius: 10px; padding: 10px 12px; display: flex; align-items: center; gap: 8px;
-    }
+    body { margin: 0; padding: 22px; background: var(--bg); color: var(--text);
+      font: 14px/1.45 system-ui, -apple-system, Segoe UI, Roboto, Inter, Arial, sans-serif; }
+    h1 { margin: 0 0 4px; font-size: 22px; }
+    .small { color: var(--muted); font-size: 12px; }
+    .controls { display: flex; flex-wrap: wrap; gap: 12px; margin: 12px 0 18px; }
+    .ctrl { background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+      padding: 10px 12px; display: flex; align-items: center; gap: 8px; }
     .ctrl label { color: var(--muted); font-size: 12px; }
     select, button, input[type="checkbox"], input[type="number"] {
-      background: var(--panel-2); color: var(--text);
-      border: 1px solid var(--border); border-radius: 8px;
-      padding: 6px 8px; font: inherit;
+      background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+      border-radius: 8px; padding: 6px 8px; font: inherit;
     }
     button { cursor: pointer; }
-    .wrap {
-      display: grid; grid-template-columns: 1.4fr 0.8fr; gap: 16px;
-    }
-    .card {
-      background: var(--panel); border: 1px solid var(--border);
-      border-radius: 16px; padding: 16px;
-    }
+    .wrap { display: grid; grid-template-columns: 1.4fr 0.8fr; gap: 16px; }
+    .card { background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 16px; }
     .card h3 { margin: 0 0 12px; font-size: 16px; }
-    .legend {
-      display: flex; gap: 10px; align-items: center; color: var(--muted); margin-bottom: 10px;
-    }
-    .dot {
-      width: 10px; height: 10px; border-radius: 50%;
-      display: inline-block; margin-right: 6px;
-    }
+    .legend { display: flex; gap: 10px; align-items: center; color: var(--muted); margin-bottom: 10px; }
+    .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-right: 6px; }
     .chips { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
-    .chip {
-      background: var(--chip); border: 1px solid var(--border);
-      border-radius: 999px; padding: 6px 10px; color: var(--muted);
-      font-size: 12px;
-    }
-    table {
-      width: 100%; border-collapse: collapse; font-size: 13px;
-    }
+    .chip { background: var(--chip); border: 1px solid var(--border); border-radius: 999px;
+      padding: 6px 10px; color: var(--muted); font-size: 12px; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
     th, td { padding: 8px 10px; border-bottom: 1px solid var(--border); }
     th { text-align: left; color: var(--muted); font-weight: 600; }
-    .pill {
-      padding: 2px 8px; border-radius: 999px; font-size: 12px;
-      border: 1px solid var(--border);
-    }
-    .chart-wrap {
-      position: relative;
-      height: 360px;      /* фиксируем высоту — график не “ползёт” */
-      width: 100%;
-      overflow: hidden;
-    }
-    #chart {
-      display: block;
-      width: 100% !important;
-      height: 100% !important;
-    }
-    .ok { color: var(--ok); }
-    .bad { color: var(--bad); }
-    .muted { color: var(--muted); }
-    .small { font-size: 12px; color: var(--muted); }
+    .pill { padding: 2px 8px; border-radius: 999px; font-size: 12px; border: 1px solid var(--border); }
+    .chart-wrap { position: relative; height: 360px; width: 100%; overflow: hidden; }
+    #chart { display: block; width: 100% !important; height: 100% !important; }
+    .ok { color: var(--ok); } .bad { color: var(--bad); } .muted { color: var(--muted); }
     @media (max-width: 980px) { .wrap { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
   <h1>WG Speedtest Dashboard</h1>
+  <div class="small">Источник данных: <span id="badge-src">/stats.json</span></div>
 
   <div class="controls">
     <div class="ctrl">
       <label for="sel-server">Сервер:</label>
-      <select id="sel-server">
-        <option>us01</option>
-        <option>gb01</option>
-        <option>de01</option>
-        <option>nl01</option>
-        <option>se01</option>
-        <option>jp01</option>
-      </select>
+      <select id="sel-server"></select>
     </div>
     <div class="ctrl">
       <label for="sel-metric">Метрика:</label>
@@ -139,9 +87,7 @@
         <span><span class="dot" style="background:#5AD8A6"></span>grand</span>
         <span><span class="dot" style="background:#F6BD16"></span>basic</span>
       </div>
-      <div class="chart-wrap">
-        <canvas id="chart"></canvas>
-      </div>
+      <div class="chart-wrap"><canvas id="chart"></canvas></div>
       <div class="chips" id="chips"></div>
       <div class="small" style="margin-top:8px;">
         Пороговые линии: grand↓ &lt; 100 Mb/s, basic↓ &lt; 5 Mb/s, ping &gt; 200 ms.
@@ -159,99 +105,24 @@
         </thead>
         <tbody></tbody>
       </table>
-      <div class="small" style="margin-top:10px;">Если есть <code>data/stats.json</code> — подхватим автоматически.</div>
+      <div class="small" style="margin-top:10px;">Тянем <code>/stats.json</code> в формате <code>{"points":[...]}</code>.</div>
     </div>
   </div>
 
   <div class="small" style="margin-top:16px; text-align:center;">
-    Chart.js • демо-данные; позже подключим реальные артефакты
+    Chart.js • реальные данные
   </div>
 
   <script>
-    // ===== Попытка загрузить реальные данные.
-    // Ожидаемый формат stats.json (упрощённо):
-    // {
-    //   "<sid>": {
-    //     "timestamps": [ms,...],
-    //     "novpn": { "download":[], "upload":[], "ping":[] },
-    //     "grand": { "download":[], "upload":[], "ping":[] },
-    //     "basic": { "download":[], "upload":[], "ping":[] }
-    //   },
-    //   "last": [
-    //     { ts: 1710000000000, server:"us01", profile:"grand", ping:..., down:..., up:..., loss:..., jitter:..., pmtu:..., geo:"US" },
-    //     ...
-    //   ]
-    // }
+    // ===== Загрузка /stats.json (format: { points:[{ts,sid,profile,down,up,ping,...}], generated_at })
     async function loadStats() {
-      try {
-        const r = await fetch('data/stats.json?ts=' + Date.now(), { cache: 'no-store' });
-        if (!r.ok) throw new Error('HTTP ' + r.status);
-        const j = await r.json();
-        return j;
-      } catch (e) {
-        return null;
-      }
+      const url = 'stats.json?ts=' + Date.now();
+      const r = await fetch(url, { cache: 'no-store' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
     }
 
-    // // ===== ДЕМО-данные (если stats.json недоступен)
-    // function buildDemo() {
-    //   const makeTs = () => Array.from({length: 20}, (_,i)=>Date.now() - (19-i)*1800_000);
-    //   // Небольшие хелперы
-    //   const gen = (arr) => ({ download:[...arr], upload: arr.map(v=>Math.max(50, Math.round(v*0.6))), ping: arr.map((_,i)=>Math.round(40+Math.random()*150)) });
-    //   const sv = (d,g,b,ts) => ({ timestamps: ts, novpn: gen(d), grand: gen(g), basic: gen(b) });
-
-    //   const us_ts = makeTs(), gb_ts = makeTs(), de_ts = makeTs();
-    //   const nl_ts = makeTs(), se_ts = makeTs(), jp_ts = makeTs();
-
-    //   const demo = {
-    //     us01: sv(
-    //       [11000,17000,12500,14000,15800,16800,12000,8200,15500,16000,11200,9800,13000,14800,16000,12000,10800,13400,15000,12000],
-    //       [260,280,210,330,290,305,275,240,315,300,285,320,295,270,355,310,325,280,340,300],
-    //       [7.2,7.6,6.9,7.3,7.5,7.4,7.1,7.2,7.4,7.5,7.3,7.2,7.2,7.3,7.5,7.1,7.4,7.4,7.6,7.2],
-    //       us_ts
-    //     ),
-    //     gb01: sv(
-    //       [9000,10000,8500,12000,13000,16000,10000,7800,9000,12000,13000,10000,9000,14000,15000,11600,9800,14500,13500,11200],
-    //       [320,360,300,340,390,420,310,280,330,410,360,300,290,400,420,380,330,360,350,340],
-    //       [7.1,7.2,7.0,7.2,7.5,7.1,7.3,7.0,7.2,7.4,7.5,7.2,7.1,7.3,7.5,7.2,7.1,7.2,7.3,7.1],
-    //       gb_ts
-    //     ),
-    //     de01: sv(
-    //       [10000,16500,10500,13500,15500,16800,12300,8600,12500,14800,16000,11000,9800,13000,16600,12000,10800,13400,15000,12000],
-    //       [280,300,320,350,370,310,280,260,290,315,330,295,275,260,300,310,325,280,340,300],
-    //       [7.3,7.1,7.2,7.4,7.5,7.2,7.3,7.0,7.1,7.4,7.5,7.2,7.2,7.3,7.4,7.1,7.4,7.2,7.5,7.2],
-    //       de_ts
-    //     ),
-    //     nl01: sv(
-    //       [9500,12000,9000,13000,14000,15000,11000,9000,9800,12000,13000,11000,9800,13000,14500,11800,10000,14000,15000,13000],
-    //       [300,290,310,370,380,360,280,270,300,340,360,330,290,310,380,340,330,355,365,345],
-    //       [7.1,7.2,7.2,7.3,7.4,7.5,7.2,7.3,7.2,7.4,7.5,7.2,7.2,7.3,7.4,7.3,7.2,7.4,7.5,7.3],
-    //       nl_ts
-    //     ),
-    //     se01: sv(
-    //       [10000,14000,12000,15000,16000,15500,12000,10000,13000,14000,16000,15000,14000,15000,16000,12000,14000,15500,14500,15000],
-    //       [410,380,360,420,430,410,390,370,360,440,430,425,400,415,430,405,410,395,400,410],
-    //       [7.0,7.1,7.2,7.3,7.3,7.2,7.2,7.1,7.2,7.4,7.5,7.3,7.2,7.4,7.5,7.3,7.2,7.4,7.4,7.3],
-    //       se_ts
-    //     ),
-    //     jp01: sv(
-    //       [10500,15000,9800,13000,15500,15000,12000,11000,10000,12500,14000,15000,12000,11000,14500,15000,12000,13000,14000,13500],
-    //       [350,360,300,320,330,340,310,305,295,310,330,335,340,320,325,315,300,320,345,335],
-    //       [7.2,7.3,7.2,7.3,7.4,7.4,7.2,7.1,7.2,7.3,7.4,7.3,7.2,7.3,7.4,7.3,7.2,7.2,7.3,7.3],
-    //       jp_ts
-    //     ),
-    //     last: [
-    //       { ts: Date.now()-120000, server:'us01', profile:'novpn', ping:8.9, down:465.3,  up:363.1,  loss:0.0, jitter:0.02, pmtu:1500, geo:'US' },
-    //       { ts: Date.now()-110000, server:'us01', profile:'grand', ping:41.5,down:334.1,  up:258.3,  loss:0.0, jitter:1.10, pmtu:1420, geo:'US' },
-    //       { ts: Date.now()-100000, server:'us01', profile:'basic', ping:34.8,down:7.5,    up:179.4,  loss:0.0, jitter:0.08, pmtu:1420, geo:'US' },
-    //       { ts: Date.now()- 90000, server:'gb01', profile:'grand', ping:99.3,down:461.4,  up:402.1,  loss:0.0, jitter:0.61, pmtu:1420, geo:'GB' },
-    //       { ts: Date.now()- 80000, server:'de01', profile:'grand', ping:110.7,down:299.4, up:348.5,  loss:0.0, jitter:0.20, pmtu:1420, geo:'DE' },
-    //     ]
-    //   };
-    //   return demo;
-    // }
-
-    // ===== UI state
+    // ===== Глобальное состояние UI
     const elServer  = document.getElementById('sel-server');
     const elMetric  = document.getElementById('sel-metric');
     const elWindow  = document.getElementById('inp-window');
@@ -262,48 +133,26 @@
     const elChips   = document.getElementById('chips');
     const elTBody   = document.querySelector('#tbl-last tbody');
 
-    // novpn скрыт по умолчанию
-    elChkNov.checked = false;
-
+    elChkNov.checked = false; // novpn скрыт по умолчанию
     const seriesVisibility = { novpn: false, grand: true, basic: true };
-    const colors = {
-      novpn: '#6EA8FE',
-      grand: '#5AD8A6',
-      basic: '#F6BD16',
-    };
-
-    // novpn не участвует в расчёте масштаба Y (можно включить при желании)
+    const colors = { novpn: '#6EA8FE', grand: '#5AD8A6', basic: '#F6BD16' };
     const INCLUDE_NOVPN_IN_SCALE = false;
 
-    // ===== Chart init (один canvas, фикс. высота)
+    // ===== Chart init
     const ctx = document.getElementById('chart').getContext('2d');
     const chart = new Chart(ctx, {
       type: 'line',
       data: { labels: [], datasets: [] },
       options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        resizeDelay: 150,
-        animation: false,
+        responsive: true, maintainAspectRatio: false, resizeDelay: 150, animation: false,
         interaction: { mode: 'index', intersect: false },
         scales: {
-          x: {
-            type: 'time',
-            time: { tooltipFormat: 'yyyy-MM-dd HH:mm' },
-            ticks: { color: '#9fb3c8' }, grid: { color: '#1f2a3a' }
-          },
-          y: {
-            beginAtZero: true, ticks: { color: '#9fb3c8' }, grid: { color: '#1f2a3a' }
-          }
+          x: { type: 'time', time: { tooltipFormat: 'yyyy-MM-dd HH:mm' },
+               ticks: { color: '#9fb3c8' }, grid: { color: '#1f2a3a' } },
+          y: { beginAtZero: true, ticks: { color: '#9fb3c8' }, grid: { color: '#1f2a3a' } }
         },
-        plugins: {
-          legend: { display: false },
-          tooltip: {
-            callbacks: {
-              label: c => `${c.dataset.label}: ${c.formattedValue}`
-            }
-          }
-        },
+        plugins: { legend: { display: false },
+          tooltip: { callbacks: { label: c => `${c.dataset.label}: ${c.formattedValue}` } } },
         elements: { point: { radius: 2 } }
       }
     });
@@ -316,27 +165,92 @@
         const metric = elMetric.value;
         if (!['download','ping','upload'].includes(metric)) return;
         const { ctx, chartArea:{top,bottom,left,right}, scales:{y} } = c;
-        ctx.save();
-        ctx.setLineDash([6,6]);
-        ctx.lineWidth = 1;
-
-        function drawLine(val, color) {
-          const yPos = y.getPixelForValue(val);
-          if (yPos < top || yPos > bottom) return;
-          ctx.strokeStyle = color;
-          ctx.beginPath(); ctx.moveTo(left, yPos); ctx.lineTo(right, yPos); ctx.stroke();
-        }
-
-        if (metric === 'download') {
-          drawLine(TH.grandDL, '#5AD8A6');
-          drawLine(TH.basicDL, '#F6BD16');
-        }
-        if (metric === 'ping') {
-          drawLine(TH.pingRed, '#ff5d5d');
-        }
+        ctx.save(); ctx.setLineDash([6,6]); ctx.lineWidth = 1;
+        const draw = (val, color) => {
+          const yPos = y.getPixelForValue(val); if (yPos < top || yPos > bottom) return;
+          ctx.strokeStyle = color; ctx.beginPath(); ctx.moveTo(left, yPos); ctx.lineTo(right, yPos); ctx.stroke();
+        };
+        if (metric === 'download') { draw(TH.grandDL, '#5AD8A6'); draw(TH.basicDL, '#F6BD16'); }
+        if (metric === 'ping') { draw(TH.pingRed, '#ff5d5d'); }
         ctx.restore();
       }
     });
+
+    // ===== Трансформация: points[] -> агрегат по серверам/профилям/метрикам
+    function transformPointsToSeries(points) {
+      // Сортируем по времени (на всякий случай)
+      points = [...points].sort((a,b)=> (a.ts||0) - (b.ts||0));
+
+      const sids = new Set(points.map(p=>p.sid).filter(Boolean));
+      const perSid = {}; // sid -> { timestamps:[], novpn:{download,upload,ping}, grand:{...}, basic:{...} }
+
+      const ensure = (sid) => {
+        if (!perSid[sid]) {
+          perSid[sid] = {
+            timestamps: [], // список уникальных ts
+            novpn: { download:[], upload:[], ping:[] },
+            grand: { download:[], upload:[], ping:[] },
+            basic: { download:[], upload:[], ping:[] },
+          };
+        }
+        return perSid[sid];
+      };
+
+      // Чтобы rяды были выровнены по ts, построим словарь tsIndex для каждого sid
+      const tsIndexMap = {}; // sid -> Map(ts -> idx)
+
+      for (const sid of sids) {
+        tsIndexMap[sid] = new Map();
+      }
+
+      // Пройдёмся по точкам: дописываем ts, создаём индексы
+      for (const p of points) {
+        const sid = p.sid; if (!sid) continue;
+        const box = ensure(sid);
+        const m = tsIndexMap[sid];
+        if (!m.has(p.ts)) {
+          m.set(p.ts, box.timestamps.length);
+          box.timestamps.push(p.ts);
+          // расширяем все профили-загрузка массивов на один слот None (чтобы потом просто присвоить)
+          for (const prof of ['novpn','grand','basic']) {
+            for (const met of ['download','upload','ping']) {
+              box[prof][met].push(null);
+            }
+          }
+        }
+      }
+
+      // Вставим значения по индексам
+      for (const p of points) {
+        const sid = p.sid; if (!sid) continue;
+        const prof = (p.profile || '').toLowerCase();
+        if (!['novpn','grand','basic'].includes(prof)) continue;
+        const idx = tsIndexMap[sid].get(p.ts);
+        const b = perSid[sid][prof];
+        if (b) {
+          b.download[idx] = p.down ?? null;
+          b.upload[idx]   = p.up   ?? null;
+          b.ping[idx]     = p.ping ?? null;
+        }
+      }
+
+      // Соберём "last" (последние измерения по каждому sid+profile)
+      const last = [];
+      const newestPerSidProfile = new Map(); // key: sid|profile -> row
+      for (const p of points) {
+        const k = p.sid + '|' + (p.profile||'').toLowerCase();
+        const prev = newestPerSidProfile.get(k);
+        if (!prev || (p.ts > prev.ts)) newestPerSidProfile.set(k, p);
+      }
+      for (const row of newestPerSidProfile.values()) {
+        last.push({
+          ts: row.ts, server: row.sid, profile: row.profile,
+          ping: row.ping, down: row.down, up: row.up,
+          loss: row.loss, jitter: row.jitter, pmtu: row.pmtu, geo: row.geo
+        });
+      }
+      return { perSid, last };
+    }
 
     function fmtNumber(v, digits=0) {
       if (v == null || isNaN(v)) return '—';
@@ -352,24 +266,15 @@
     function buildDatasets(data, metric) {
       const pick = (p) => (data[p] && data[p][metric]) ? data[p][metric] : [];
       const ds = [];
-      if (seriesVisibility.novpn) {
-        ds.push({ label: 'novpn', borderColor: colors.novpn, tension: 0.25,
-          data: pick('novpn'), hidden: !seriesVisibility.novpn });
-      }
-      if (seriesVisibility.grand) {
-        ds.push({ label: 'grand', borderColor: colors.grand, tension: 0.25,
-          data: pick('grand') });
-      }
-      if (seriesVisibility.basic) {
-        ds.push({ label: 'basic', borderColor: colors.basic, tension: 0.25,
-          data: pick('basic') });
-      }
+      if (seriesVisibility.novpn) ds.push({ label:'novpn', borderColor: colors.novpn, tension: 0.25, data: pick('novpn'), hidden: !seriesVisibility.novpn });
+      if (seriesVisibility.grand) ds.push({ label:'grand', borderColor: colors.grand, tension: 0.25, data: pick('grand') });
+      if (seriesVisibility.basic) ds.push({ label:'basic', borderColor: colors.basic, tension: 0.25, data: pick('basic') });
       return ds;
     }
 
     function updateChart() {
       const sid = elServer.value;
-      const metric = elMetric.value;  // download / upload / ping
+      const metric = elMetric.value;
       const win = Math.min(200, Math.max(5, parseInt(elWindow.value, 10) || 20));
       elWindow.value = String(win);
 
@@ -377,42 +282,27 @@
       seriesVisibility.grand = elChkGr.checked;
       seriesVisibility.basic = elChkBs.checked;
 
-      const src = (window.appData && window.appData[sid]) || (window.appData && window.appData.us01);
+      const src = window._series.perSid[sid];
       if (!src) return;
 
       const total = (src.timestamps?.length || 0);
       const idx0 = Math.max(0, total - win);
-
       const slice = (arr) => (arr || []).slice(idx0);
+
       const base = {
         timestamps: slice(src.timestamps),
-        novpn: {
-          download: slice(src.novpn?.download),
-          upload  : slice(src.novpn?.upload),
-          ping    : slice(src.novpn?.ping),
-        },
-        grand: {
-          download: slice(src.grand?.download),
-          upload  : slice(src.grand?.upload),
-          ping    : slice(src.grand?.ping),
-        },
-        basic: {
-          download: slice(src.basic?.download),
-          upload  : slice(src.basic?.upload),
-          ping    : slice(src.basic?.ping),
-        }
+        novpn: { download: slice(src.novpn.download), upload: slice(src.novpn.upload), ping: slice(src.novpn.ping) },
+        grand: { download: slice(src.grand.download), upload: slice(src.grand.upload), ping: slice(src.grand.ping) },
+        basic: { download: slice(src.basic.download), upload: slice(src.basic.upload), ping: slice(src.basic.ping) },
       };
 
       chart.data.labels = base.timestamps.map(ts => new Date(ts));
       chart.data.datasets = buildDatasets(base, metric);
 
-      // Автомасштаб по видимым профилям; novpn можно исключать
       const pool = [];
       if (seriesVisibility.grand) pool.push(...(base.grand[metric] || []).filter(Number.isFinite));
       if (seriesVisibility.basic) pool.push(...(base.basic[metric] || []).filter(Number.isFinite));
-      if (INCLUDE_NOVPN_IN_SCALE && seriesVisibility.novpn) {
-        pool.push(...(base.novpn[metric] || []).filter(Number.isFinite));
-      }
+      if (INCLUDE_NOVPN_IN_SCALE && seriesVisibility.novpn) pool.push(...(base.novpn[metric] || []).filter(Number.isFinite));
       const yMax = Math.max(1, ...pool);
       const pad = yMax < 20 ? 5 : yMax * 0.10;
       chart.options.scales.y.beginAtZero = true;
@@ -420,7 +310,7 @@
 
       chart.update('none');
 
-      // Резюме под графиком
+      // резюме
       elChips.innerHTML = '';
       const lastIdx = base.timestamps.length - 1;
       const pickLast = (p) => (base[p] && base[p][metric]) ? base[p][metric][lastIdx] : null;
@@ -433,16 +323,16 @@
     }
 
     function renderLastTable() {
-      const rows = (window.appData && window.appData.last) || [];
+      const rows = window._series.last || [];
       const tbody = elTBody; tbody.innerHTML = '';
       if (!rows.length) return;
 
-      const fmtDT = ts => {
-        try { return new Date(ts).toLocaleString('ru-RU'); }
-        catch { return '—'; }
-      };
+      const fmtDT = ts => { try { return new Date(ts).toLocaleString('ru-RU'); } catch { return '—'; } };
 
-      for (const r of rows) {
+      // сортировка: по времени убыв., потом по серверу
+      const sorted = [...rows].sort((a,b)=> (b.ts - a.ts) || String(a.server).localeCompare(b.server));
+
+      for (const r of sorted) {
         const tr = document.createElement('tr');
         const lossBad   = typeof r.loss   === 'number' && r.loss   > 1.0;
         const jitterBad = typeof r.jitter === 'number' && r.jitter > 10;
@@ -465,11 +355,13 @@
       }
     }
 
+    function populateServersSelect() {
+      const sids = Object.keys(window._series.perSid).sort();
+      elServer.innerHTML = sids.map(s => `<option>${s}</option>`).join('');
+    }
+
     // События
-    document.getElementById('btn-refresh').addEventListener('click', () => {
-      updateChart();
-      renderLastTable();
-    });
+    document.getElementById('btn-refresh').addEventListener('click', () => { updateChart(); renderLastTable(); });
     elServer.addEventListener('change', updateChart);
     elMetric.addEventListener('change', updateChart);
     elWindow.addEventListener('change', updateChart);
@@ -477,37 +369,26 @@
     elChkGr.addEventListener('change', updateChart);
     elChkBs.addEventListener('change', updateChart);
 
-    // // Загрузка данных: реальные (stats.json) -> демо
-    // (async function init() {
-    //   const real = await loadStats();
-    //   window.appData = real || buildDemo();
-    //   // первый рендер
-    //   renderLastTable();
-    //   updateChart();
-    // })();
-
+    // Инициализация
     (async function init() {
-      const badge = document.getElementById('badge-src');
-      const real = await loadStats();
+      try {
+        const data = await loadStats();            // { points:[...], generated_at }
+        if (!data || !Array.isArray(data.points)) throw new Error('bad schema');
+        const series = transformPointsToSeries(data.points);
+        window._series = series;
 
-      if (!real) {
-        badge.textContent = 'нет данных';
-        // Блокируем UI, показываем сообщение
+        populateServersSelect();
+        renderLastTable();
+        updateChart();
+      } catch (e) {
         document.querySelectorAll('select,button,input').forEach(el => el.disabled = true);
         const msg = document.createElement('div');
         msg.className = 'small';
         msg.style.marginTop = '12px';
-        msg.textContent = 'Нет stats.json: загрузите data/stats.json (формат см. комментарий в коде).';
+        msg.textContent = 'Не удалось загрузить /stats.json или схема не совпала.';
         document.body.appendChild(msg);
-        return;
+        console.error(e);
       }
-
-      window.appData = real;
-      window.appData.__source = 'real';
-      badge.textContent = 'data: stats.json';
-
-      renderLastTable();
-      updateChart();
     })();
   </script>
 </body>
