@@ -502,6 +502,11 @@ jobs:
             g_txt, g_dl, g_j, g_ping = brief(g)
             s_txt, s_dl, s_j, s_ping = brief(s)
 
+            if not g:
+              g_txt += " ❌"
+            if not s:
+              s_txt += " ❌"
+
             if g_dl is not None and g_dl < GRAND_DL_RED: g_txt += " ❌"
             if s_dl is not None and s_dl < BASIC_DL_RED: s_txt += " ❌"
             if g_ping is not None and g_ping > 200: g_txt += " ❌"
