@@ -1,0 +1,56 @@
+name: Publish Dashboard (HTML-only)
+
+on:
+  push:
+    branches: [ main ]     # либо ваша дефолтная ветка
+    paths:
+      - 'docs/**'
+
+permissions:
+  contents: write
+
+jobs:
+  publish_dashboard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo (to get docs/index.html)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Build site folder
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p site/data
+          cp -f docs/index.html site/index.html
+          touch site/.nojekyll
+
+          # подтягиваем текущий stats.json из уже опубликованного gh-pages
+          OWNER="${GITHUB_REPOSITORY%%/*}"
+          REPO="${GITHUB_REPOSITORY##*/}"
+          URL="https://${OWNER}.github.io/${REPO}/data/stats.json"
+          echo "Fetch existing stats: $URL"
+          if curl -fsSL "$URL" -o site/data/stats.json ; then
+            echo "Preserved existing data/stats.json"
+          else
+            echo '{"points":[]}' > site/data/stats.json
+            echo "No existing stats.json; created empty placeholder."
+          fi
+
+          ls -la site
+
+      - name: Push to gh-pages (single orphan commit)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          cd site
+          git init -b gh-pages
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .
+          git commit -m "Update dashboard HTML"
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push --force origin gh-pages
