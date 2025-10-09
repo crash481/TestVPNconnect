@@ -569,32 +569,53 @@ jobs:
             --data-urlencode "text=${MSG}" >/dev/null || true
 
   publish_pages:
-    needs: [fetch_servers, speedtest]
+    needs: [fetch_servers, speedtest]   # оставляем зависимости ради порядка
+    if: always()                        # ← запускаем даже при частичных фейлах
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repo (for docs/index.html)
+      - name: Checkout main (для docs/index.html)
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
-      - name: Download artifacts (merge all)
+      - name: Checkout gh-pages (предыдущий stats.json)
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          path: prev_site
+          fetch-depth: 1
+        continue-on-error: true         # ветки может ещё не быть на первом запуске
+
+      - name: Download artifacts (что успело собраться)
         uses: actions/download-artifact@v4
         with:
           pattern: speedtests-*
           merge-multiple: true
           path: results
+        continue-on-error: true         # если часть матрицы упала — всё равно идём дальше
 
-      - name: Build site (index.html + stats.json)
+      - name: Build site (merge prev stats + new points)
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p site/data
+          mkdir -p site
           cp -f docs/index.html site/index.html
           touch site/.nojekyll
 
           python3 <<'PY'
-          import glob, json, os, re, time
+          import glob, json, os, re, time, hashlib
 
+          # 1) Подтянуть старые points (если раньше публиковали)
+          old_points = []
+          try:
+            with open("prev_site/stats.json","r",encoding="utf-8") as f:
+              j=json.load(f)
+              if isinstance(j.get("points"), list):
+                old_points = j["points"]
+          except Exception:
+            pass
+
+          # 2) Собрать новые points из артефактов этого запуска
           def sid_from_name(p):
             b=os.path.basename(p)
             if b.endswith('.json'): b=b[:-5]
@@ -618,11 +639,11 @@ jobs:
               cur=by_key.get(k)
               if (not cur) or (mt>cur[0]): by_key[k]=(mt,p)
 
-          points=[]
+          new_points = []
           for (sid,kind),(_,p) in sorted(by_key.items()):
             j=json.load(open(p))
             t=int(os.path.getmtime(p))*1000
-            points.append({
+            new_points.append({
               "ts": t,
               "sid": sid,
               "profile": kind,
@@ -635,16 +656,22 @@ jobs:
               "geo": ((j.get("server") or {}).get("cc") or ((j.get("server") or {}).get("country")))
             })
 
-          os.makedirs("site/data", exist_ok=True)
-          json.dump({"points": points, "generated_at": int(time.time()*1000)},
-                    open("site/data/stats.json","w"), ensure_ascii=False)
-          print("Wrote site/data/stats.json points:", len(points))
+          # 3) Мердж + дедуп по (ts,sid,profile)
+          def key(p): return (p.get("ts"), p.get("sid"), (p.get("profile") or '').lower())
+          merged = {}
+          for arr in (old_points, new_points):
+            for row in arr:
+              merged[key(row)] = row
+          points = sorted(merged.values(), key=lambda r: (r["ts"], r.get("sid",""), (r.get("profile") or "")))
+
+          os.makedirs("site", exist_ok=True)
+          out = {"points": points, "generated_at": int(time.time()*1000)}
+          with open("site/stats.json","w",encoding="utf-8") as f:
+            json.dump(out, f, ensure_ascii=False)
+          print("Merged points:", len(points), " (old:", len(old_points), " + new:", len(new_points), ")")
           PY
 
-          echo "--- site tree ---"
           ls -la site
-          echo "--- site/data ---"
-          ls -la site/data
 
       - name: Publish to gh-pages (single orphan commit)
         shell: bash
