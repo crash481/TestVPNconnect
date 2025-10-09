@@ -159,7 +159,7 @@
         </thead>
         <tbody></tbody>
       </table>
-      <div class="small" style="margin-top:10px;">Если есть <code>docs/stats.json</code> — подхватим автоматически.</div>
+      <div class="small" style="margin-top:10px;">Если есть <code>data/stats.json</code> — подхватим автоматически.</div>
     </div>
   </div>
 
@@ -184,7 +184,7 @@
     // }
     async function loadStats() {
       try {
-        const r = await fetch('stats.json?ts=' + Date.now(), { cache: 'no-store' });
+        const r = await fetch('data/stats.json?ts=' + Date.now(), { cache: 'no-store' });
         if (!r.ok) throw new Error('HTTP ' + r.status);
         const j = await r.json();
         return j;
@@ -497,7 +497,7 @@
         const msg = document.createElement('div');
         msg.className = 'small';
         msg.style.marginTop = '12px';
-        msg.textContent = 'Нет stats.json: загрузите docs/stats.json (формат см. комментарий в коде).';
+        msg.textContent = 'Нет stats.json: загрузите data/stats.json (формат см. комментарий в коде).';
         document.body.appendChild(msg);
         return;
       }
