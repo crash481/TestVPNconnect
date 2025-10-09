@@ -588,7 +588,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p site
+          mkdir -p site/data
           cp -f docs/index.html site/index.html
           touch site/.nojekyll
 
@@ -635,12 +635,16 @@ jobs:
               "geo": ((j.get("server") or {}).get("cc") or ((j.get("server") or {}).get("country")))
             })
 
-          os.makedirs("site", exist_ok=True)
+          os.makedirs("site/data", exist_ok=True)
           json.dump({"points": points, "generated_at": int(time.time()*1000)},
-                    open("site/stats.json","w"), ensure_ascii=False)
-          print("Wrote site/stats.json points:", len(points))
+                    open("site/data/stats.json","w"), ensure_ascii=False)
+          print("Wrote site/data/stats.json points:", len(points))
           PY
+
+          echo "--- site tree ---"
           ls -la site
+          echo "--- site/data ---"
+          ls -la site/data
 
       - name: Publish to gh-pages (single orphan commit)
         shell: bash
