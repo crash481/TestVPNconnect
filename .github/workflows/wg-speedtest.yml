@@ -5,6 +5,10 @@ on:
   schedule:
     - cron: '*/30 * * * *'  # каждые 30 минут
 
+# нужно, чтобы пушить в gh-pages токеном GITHUB_TOKEN
+permissions:
+  contents: write
+
 jobs:
   fetch_servers:
     runs-on: ubuntu-latest
@@ -92,7 +96,6 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update -y
-          # FIX: tracepath lives in iputils-tracepath on Ubuntu
           sudo apt-get install -y --no-install-recommends \
             wireguard curl jq iputils-ping iputils-tracepath
 
@@ -182,7 +185,6 @@ jobs:
             return loss, mdev
 
           def quick_mtu(target="1.1.1.1"):
-            # uses tracepath (package: iputils-tracepath)
             try:
               r = subprocess.run(["tracepath","-n","-m","6",target], capture_output=True, text=True, check=True)
               out = r.stdout
@@ -414,7 +416,6 @@ jobs:
           python3 <<'PY'
           import glob, json, os, re
 
-          # thresholds
           LOSS_BAD   = 1.0
           JITTER_BAD = 10.0
           GRAND_DL_RED = 100.0
@@ -443,7 +444,6 @@ jobs:
             if m: return m.group(1)
             return None
 
-          # collect
           files = sorted(glob.glob('results/**/*.json', recursive=True))
           if not files:
             msg="⚠️ WG Speedtest: no results found."
@@ -465,8 +465,8 @@ jobs:
               continue
             kind = (j.get("kind") or "").lower()
             if   kind == "novpn": take(novpn, sid, p, j)
-            elif kind == "grand":    take(grand,    sid, p, j)
-            elif kind == "basic":    take(basic,    sid, p, j)
+            elif kind == "grand": take(grand, sid, p, j)
+            elif kind == "basic": take(basic, sid, p, j)
 
           sids = sorted(set(novpn)|set(grand)|set(basic))
           if not sids:
@@ -490,7 +490,6 @@ jobs:
             try: return int(x or 0)
             except: return 0
 
-          # build SPEEDS block and DETAILS block
           speeds = ["📈 WG Speedtest — novpn vs grand vs basic", "", "SPEEDS:"]
           details = ["", "DETAILS:"]
 
@@ -503,11 +502,8 @@ jobs:
             g_txt, g_dl, g_j, g_ping = brief(g)
             s_txt, s_dl, s_j, s_ping = brief(s)
 
-            # thresholds marks
             if g_dl is not None and g_dl < GRAND_DL_RED: g_txt += " ❌"
             if s_dl is not None and s_dl < BASIC_DL_RED: s_txt += " ❌"
-
-            # highlight high ping
             if g_ping is not None and g_ping > 200: g_txt += " ❌"
             if s_ping is not None and s_ping > 200: s_txt += " ❌"
 
@@ -518,7 +514,6 @@ jobs:
               f"  basic  : {s_txt}"
             )
 
-            # diagnostics line (compact)
             def diag(j):
               if not j: 
                 return ("n/a","—","n/a","n/a","0/0")
@@ -531,10 +526,10 @@ jobs:
               loss_s = "n/a" if loss is None else f"{loss}%"
               jit_s  = "n/a" if jit  is None else f"{jit}ms"
               mtu_s  = str(pmtu) if pmtu else "—"
-              mb_dw  = ints(j.get("download_MB"))
-              mb_up  = ints(j.get("upload_MB"))
-              traf   = f"{mb_dw}/{mb_up}"
-              # add ticks inline
+              def ints(v): 
+                try: return int(v or 0)
+                except: return 0
+              traf   = f"{ints(j.get('download_MB'))}/{ints(j.get('upload_MB'))}"
               mtu_s  = f"{mtu_s}{' ✅' if (pmtu or 0)>=1400 else ' ❌'}"
               loss_s = f"{loss_s}{' ✅' if loss_ok else ' ❌'}"
               jit_s  = f"{jit_s}{' ✅' if jit_ok  else ' ❌'}"
@@ -572,3 +567,92 @@ jobs:
           curl -s "https://api.telegram.org/bot${BOT}/sendMessage" \
             -d "chat_id=${CHAT}" \
             --data-urlencode "text=${MSG}" >/dev/null || true
+
+  publish_pages:
+    needs: [fetch_servers, speedtest]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo (for docs/index.html)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Download artifacts (merge all)
+        uses: actions/download-artifact@v4
+        with:
+          pattern: speedtests-*
+          merge-multiple: true
+          path: results
+
+      - name: Build site (index.html + stats.json)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p site
+          cp -f docs/index.html site/index.html
+          touch site/.nojekyll
+
+          python3 <<'PY'
+          import glob, json, os, re, time
+
+          def sid_from_name(p):
+            b=os.path.basename(p)
+            if b.endswith('.json'): b=b[:-5]
+            m=re.match(r'novpn-(.+)$',b)
+            if m: return m.group(1)
+            m=re.match(r'result-(.+?)-(grand|basic)$',b)
+            if m: return m.group(1)
+            return None
+
+          files = sorted(glob.glob('results/**/*.json', recursive=True))
+          by_key = {}  # (sid,kind)->(mtime,path)
+          for p in files:
+            try:
+              j = json.load(open(p))
+            except Exception:
+              continue
+            sid = j.get("server_id") or sid_from_name(p)
+            kind = (j.get("kind") or "").lower()
+            if sid and kind in ("novpn","grand","basic"):
+              k=(sid,kind); mt=os.path.getmtime(p)
+              cur=by_key.get(k)
+              if (not cur) or (mt>cur[0]): by_key[k]=(mt,p)
+
+          points=[]
+          for (sid,kind),(_,p) in sorted(by_key.items()):
+            j=json.load(open(p))
+            t=int(os.path.getmtime(p))*1000
+            points.append({
+              "ts": t,
+              "sid": sid,
+              "profile": kind,
+              "ping": j.get("ping_ms"),
+              "down": j.get("download_Mbps"),
+              "up": j.get("upload_Mbps"),
+              "loss": j.get("packet_loss_pct"),
+              "jitter": j.get("jitter_ms"),
+              "pmtu": (j.get("mtu") or {}).get("pmtu"),
+              "geo": ((j.get("server") or {}).get("cc") or ((j.get("server") or {}).get("country")))
+            })
+
+          os.makedirs("site", exist_ok=True)
+          json.dump({"points": points, "generated_at": int(time.time()*1000)},
+                    open("site/stats.json","w"), ensure_ascii=False)
+          print("Wrote site/stats.json points:", len(points))
+          PY
+          ls -la site
+
+      - name: Publish to gh-pages (single orphan commit)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          cd site
+          git init -b gh-pages
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .
+          git commit -m "Publish dashboard"
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push --force origin gh-pages
