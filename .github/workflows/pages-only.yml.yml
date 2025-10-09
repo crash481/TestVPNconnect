@@ -1,6 +1,7 @@
 name: Publish Dashboard (HTML-only)
 
 on:
+  workflow_dispatch:
   push:
     branches: [ main ]     # либо ваша дефолтная ветка
     paths:
