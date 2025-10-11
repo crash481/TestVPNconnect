@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>WG Speedtest Dashboard</title>
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3"></script>
+  <style>
+    :root {
+      --bg: #0f1620; --panel: #151e2a; --panel-2: #1b2635; --text: #e6edf3;
+      --muted: #9fb3c8; --ok: #17d47b; --warn: #f5a524; --bad: #ff5d5d;
+      --border: #263244; --chip: #202b3a;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 22px; background: var(--bg); color: var(--text);
+      font: 14px/1.45 system-ui, -apple-system, Segoe UI, Roboto, Inter, Arial, sans-serif; }
+    h1 { margin: 0 0 4px; font-size: 22px; }
+    .small { color: var(--muted); font-size: 12px; }
+    .controls { display: flex; flex-wrap: wrap; gap: 12px; margin: 12px 0 18px; }
+    .ctrl { background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+      padding: 10px 12px; display: flex; align-items: center; gap: 8px; }
+    .ctrl label { color: var(--muted); font-size: 12px; }
+    select, button, input[type="checkbox"], input[type="number"] {
+      background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+      border-radius: 8px; padding: 6px 8px; font: inherit;
+    }
+    button { cursor: pointer; }
+    .wrap { display: grid; grid-template-columns: 1.4fr 0.8fr; gap: 16px; }
+    .card { background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 16px; }
+    .card h3 { margin: 0 0 12px; font-size: 16px; }
+    .legend { display: flex; gap: 10px; align-items: center; color: var(--muted); margin-bottom: 10px; }
+    .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+    .chips { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+    .chip { background: var(--chip); border: 1px solid var(--border); border-radius: 999px;
+      padding: 6px 10px; color: var(--muted); font-size: 12px; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { padding: 8px 10px; border-bottom: 1px solid var(--border); }
+    th { text-align: left; color: var(--muted); font-weight: 600; }
+    .pill { padding: 2px 8px; border-radius: 999px; font-size: 12px; border: 1px solid var(--border); }
+    .chart-wrap { position: relative; height: 360px; width: 100%; overflow: hidden; }
+    #chart { display: block; width: 100% !important; height: 100% !important; }
+    .ok { color: var(--ok); } .bad { color: var(--bad); } .muted { color: var(--muted); }
+    @media (max-width: 980px) { .wrap { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <h1>WG Speedtest Dashboard</h1>
+  <div class="small">Источник данных: <span id="badge-src">/stats.json</span></div>
+
+  <div class="controls">
+    <div class="ctrl">
+      <label for="sel-server">Сервер:</label>
+      <select id="sel-server"></select>
+    </div>
+    <div class="ctrl">
+      <label for="sel-metric">Метрика:</label>
+      <select id="sel-metric">
+        <option value="download" selected>Download (Mb/s)</option>
+        <option value="upload">Upload (Mb/s)</option>
+        <option value="ping">Ping (ms)</option>
+      </select>
+    </div>
+    <div class="ctrl">
+      <label for="inp-window">Окно (точек):</label>
+      <input id="inp-window" type="number" min="5" max="200" step="1" value="20" style="width:90px" />
+    </div>
+    <div class="ctrl">
+      <label>профили</label>
+      <div style="display:flex; gap:10px; align-items:center;">
+        <label class="small"><input id="chk-novpn" type="checkbox"> novpn</label>
+        <label class="small"><input id="chk-grand" type="checkbox" checked> grand</label>
+        <label class="small"><input id="chk-basic" type="checkbox" checked> basic</label>
+      </div>
+    </div>
+    <div class="ctrl">
+      <button id="btn-refresh">Обновить</button>
+    </div>
+  </div>
+
+  <div class="wrap">
+    <div class="card">
+      <h3>Тайм-серия</h3>
+      <div class="legend">
+        <span><span class="dot" style="background:#6EA8FE"></span>novpn</span>
+        <span><span class="dot" style="background:#5AD8A6"></span>grand</span>
+        <span><span class="dot" style="background:#F6BD16"></span>basic</span>
+      </div>
+      <div class="chart-wrap"><canvas id="chart"></canvas></div>
+      <div class="chips" id="chips"></div>
+      <div class="small" style="margin-top:8px;">
+        Пороговые линии: grand↓ &lt; 100 Mb/s, basic↓ &lt; 5 Mb/s, ping &gt; 200 ms.
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Последние значения</h3>
+      <table id="tbl-last">
+        <thead>
+          <tr>
+            <th>Дата/время</th><th>Сервер</th><th>Профиль</th><th>Ping</th><th>↓ Mb/s</th><th>↑ Mb/s</th>
+            <th>Loss%</th><th>Jitter</th><th>PMTU</th><th>Geo</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <div class="small" style="margin-top:10px;">Тянем <code>/stats.json</code> в формате <code>{"points":[...]}</code>.</div>
+    </div>
+  </div>
+
+  <div class="small" style="margin-top:16px; text-align:center;">
+    Chart.js • реальные данные
+  </div>
+
+  <script>
+    // ===== Загрузка /stats.json (format: { points:[{ts,sid,profile,down,up,ping,...}], generated_at })
+    async function loadStats() {
+      const url = 'data/stats.json?ts=' + Date.now();
+      const r = await fetch(url, { cache: 'no-store' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    }
+
+    // ===== Глобальное состояние UI
+    const elServer  = document.getElementById('sel-server');
+    const elMetric  = document.getElementById('sel-metric');
+    const elWindow  = document.getElementById('inp-window');
+    const elChkNov  = document.getElementById('chk-novpn');
+    const elChkGr   = document.getElementById('chk-grand');
+    const elChkBs   = document.getElementById('chk-basic');
+    const elBtn     = document.getElementById('btn-refresh');
+    const elChips   = document.getElementById('chips');
+    const elTBody   = document.querySelector('#tbl-last tbody');
+
+    elChkNov.checked = false; // novpn скрыт по умолчанию
+    const seriesVisibility = { novpn: false, grand: true, basic: true };
+    const colors = { novpn: '#6EA8FE', grand: '#5AD8A6', basic: '#F6BD16' };
+    const INCLUDE_NOVPN_IN_SCALE = false;
+
+    // ===== Chart init
+    const ctx = document.getElementById('chart').getContext('2d');
+    const chart = new Chart(ctx, {
+      type: 'line',
+      data: { labels: [], datasets: [] },
+      options: {
+        responsive: true, maintainAspectRatio: false, resizeDelay: 150, animation: false,
+        interaction: { mode: 'index', intersect: false },
+        scales: {
+          x: { type: 'time', time: { tooltipFormat: 'yyyy-MM-dd HH:mm' },
+               ticks: { color: '#9fb3c8' }, grid: { color: '#1f2a3a' } },
+          y: { beginAtZero: true, ticks: { color: '#9fb3c8' }, grid: { color: '#1f2a3a' } }
+        },
+        plugins: { legend: { display: false },
+          tooltip: { callbacks: { label: c => `${c.dataset.label}: ${c.formattedValue}` } } },
+        elements: { point: { radius: 2 } }
+      }
+    });
+
+    // Пороговые линии
+    const TH = { grandDL: 100, basicDL: 5, pingRed: 200 };
+    Chart.register({
+      id: 'thresholds',
+      afterDatasetsDraw(c) {
+        const metric = elMetric.value;
+        if (!['download','ping','upload'].includes(metric)) return;
+        const { ctx, chartArea:{top,bottom,left,right}, scales:{y} } = c;
+        ctx.save(); ctx.setLineDash([6,6]); ctx.lineWidth = 1;
+        const draw = (val, color) => {
+          const yPos = y.getPixelForValue(val); if (yPos < top || yPos > bottom) return;
+          ctx.strokeStyle = color; ctx.beginPath(); ctx.moveTo(left, yPos); ctx.lineTo(right, yPos); ctx.stroke();
+        };
+        if (metric === 'download') { draw(TH.grandDL, '#5AD8A6'); draw(TH.basicDL, '#F6BD16'); }
+        if (metric === 'ping') { draw(TH.pingRed, '#ff5d5d'); }
+        ctx.restore();
+      }
+    });
+
+    // ===== Трансформация: points[] -> агрегат по серверам/профилям/метрикам
+    function transformPointsToSeries(points) {
+      // Сортируем по времени (на всякий случай)
+      points = [...points].sort((a,b)=> (a.ts||0) - (b.ts||0));
+
+      const sids = new Set(points.map(p=>p.sid).filter(Boolean));
+      const perSid = {}; // sid -> { timestamps:[], novpn:{download,upload,ping}, grand:{...}, basic:{...} }
+
+      const ensure = (sid) => {
+        if (!perSid[sid]) {
+          perSid[sid] = {
+            timestamps: [], // список уникальных ts
+            novpn: { download:[], upload:[], ping:[] },
+            grand: { download:[], upload:[], ping:[] },
+            basic: { download:[], upload:[], ping:[] },
+          };
+        }
+        return perSid[sid];
+      };
+
+      // Чтобы rяды были выровнены по ts, построим словарь tsIndex для каждого sid
+      const tsIndexMap = {}; // sid -> Map(ts -> idx)
+
+      for (const sid of sids) {
+        tsIndexMap[sid] = new Map();
+      }
+
+      // Пройдёмся по точкам: дописываем ts, создаём индексы
+      for (const p of points) {
+        const sid = p.sid; if (!sid) continue;
+        const box = ensure(sid);
+        const m = tsIndexMap[sid];
+        if (!m.has(p.ts)) {
+          m.set(p.ts, box.timestamps.length);
+          box.timestamps.push(p.ts);
+          // расширяем все профили-загрузка массивов на один слот None (чтобы потом просто присвоить)
+          for (const prof of ['novpn','grand','basic']) {
+            for (const met of ['download','upload','ping']) {
+              box[prof][met].push(null);
+            }
+          }
+        }
+      }
+
+      // Вставим значения по индексам
+      for (const p of points) {
+        const sid = p.sid; if (!sid) continue;
+        const prof = (p.profile || '').toLowerCase();
+        if (!['novpn','grand','basic'].includes(prof)) continue;
+        const idx = tsIndexMap[sid].get(p.ts);
+        const b = perSid[sid][prof];
+        if (b) {
+          b.download[idx] = p.down ?? null;
+          b.upload[idx]   = p.up   ?? null;
+          b.ping[idx]     = p.ping ?? null;
+        }
+      }
+
+      // Соберём "last" (последние измерения по каждому sid+profile)
+      const last = [];
+      const newestPerSidProfile = new Map(); // key: sid|profile -> row
+      for (const p of points) {
+        const k = p.sid + '|' + (p.profile||'').toLowerCase();
+        const prev = newestPerSidProfile.get(k);
+        if (!prev || (p.ts > prev.ts)) newestPerSidProfile.set(k, p);
+      }
+      for (const row of newestPerSidProfile.values()) {
+        last.push({
+          ts: row.ts, server: row.sid, profile: row.profile,
+          ping: row.ping, down: row.down, up: row.up,
+          loss: row.loss, jitter: row.jitter, pmtu: row.pmtu, geo: row.geo
+        });
+      }
+      return { perSid, last };
+    }
+
+    function fmtNumber(v, digits=0) {
+      if (v == null || isNaN(v)) return '—';
+      return Number(v).toLocaleString('ru-RU', { maximumFractionDigits: digits });
+    }
+    function chip(label, value) {
+      const span = document.createElement('span');
+      span.className = 'chip';
+      span.textContent = `${label}: ${value}`;
+      return span;
+    }
+
+    function buildDatasets(data, metric) {
+      const pick = (p) => (data[p] && data[p][metric]) ? data[p][metric] : [];
+      const ds = [];
+      if (seriesVisibility.novpn) ds.push({ label:'novpn', borderColor: colors.novpn, tension: 0.25, data: pick('novpn'), hidden: !seriesVisibility.novpn });
+      if (seriesVisibility.grand) ds.push({ label:'grand', borderColor: colors.grand, tension: 0.25, data: pick('grand') });
+      if (seriesVisibility.basic) ds.push({ label:'basic', borderColor: colors.basic, tension: 0.25, data: pick('basic') });
+      return ds;
+    }
+
+    function updateChart() {
+      const sid = elServer.value;
+      const metric = elMetric.value;
+      const win = Math.min(200, Math.max(5, parseInt(elWindow.value, 10) || 20));
+      elWindow.value = String(win);
+
+      seriesVisibility.novpn = elChkNov.checked;
+      seriesVisibility.grand = elChkGr.checked;
+      seriesVisibility.basic = elChkBs.checked;
+
+      const src = window._series.perSid[sid];
+      if (!src) return;
+
+      const total = (src.timestamps?.length || 0);
+      const idx0 = Math.max(0, total - win);
+      const slice = (arr) => (arr || []).slice(idx0);
+
+      const base = {
+        timestamps: slice(src.timestamps),
+        novpn: { download: slice(src.novpn.download), upload: slice(src.novpn.upload), ping: slice(src.novpn.ping) },
+        grand: { download: slice(src.grand.download), upload: slice(src.grand.upload), ping: slice(src.grand.ping) },
+        basic: { download: slice(src.basic.download), upload: slice(src.basic.upload), ping: slice(src.basic.ping) },
+      };
+
+      chart.data.labels = base.timestamps.map(ts => new Date(ts));
+      chart.data.datasets = buildDatasets(base, metric);
+
+      const pool = [];
+      if (seriesVisibility.grand) pool.push(...(base.grand[metric] || []).filter(Number.isFinite));
+      if (seriesVisibility.basic) pool.push(...(base.basic[metric] || []).filter(Number.isFinite));
+      if (INCLUDE_NOVPN_IN_SCALE && seriesVisibility.novpn) pool.push(...(base.novpn[metric] || []).filter(Number.isFinite));
+      const yMax = Math.max(1, ...pool);
+      const pad = yMax < 20 ? 5 : yMax * 0.10;
+      chart.options.scales.y.beginAtZero = true;
+      chart.options.scales.y.suggestedMax = Math.ceil(yMax + pad);
+
+      chart.update('none');
+
+      // резюме
+      elChips.innerHTML = '';
+      const lastIdx = base.timestamps.length - 1;
+      const pickLast = (p) => (base[p] && base[p][metric]) ? base[p][metric][lastIdx] : null;
+      const unit = metric === 'ping' ? 'ms' : 'Mb/s';
+      const nov = pickLast('novpn'), gr = pickLast('grand'), bs = pickLast('basic');
+      if (seriesVisibility.novpn && nov != null) elChips.appendChild(chip('novpn', `${fmtNumber(nov)} ${unit}`));
+      if (seriesVisibility.grand && gr != null)  elChips.appendChild(chip('grand', `${fmtNumber(gr)} ${unit}`));
+      if (seriesVisibility.basic && bs != null)  elChips.appendChild(chip('basic', `${fmtNumber(bs)} ${unit}`));
+      elChips.appendChild(chip('точек', String(base.timestamps.length)));
+    }
+
+    function renderLastTable() {
+      const rows = window._series.last || [];
+      const tbody = elTBody; tbody.innerHTML = '';
+      if (!rows.length) return;
+
+      const fmtDT = ts => { try { return new Date(ts).toLocaleString('ru-RU'); } catch { return '—'; } };
+
+      // сортировка: по времени убыв., потом по серверу
+      const sorted = [...rows].sort((a,b)=> (b.ts - a.ts) || String(a.server).localeCompare(b.server));
+
+      for (const r of sorted) {
+        const tr = document.createElement('tr');
+        const lossBad   = typeof r.loss   === 'number' && r.loss   > 1.0;
+        const jitterBad = typeof r.jitter === 'number' && r.jitter > 10;
+        const pingBad   = typeof r.ping   === 'number' && r.ping   > 200;
+        const mtuGood   = (r.pmtu || 0) >= 1400;
+
+        tr.innerHTML = `
+          <td>${fmtDT(r.ts)}</td>
+          <td>${r.server}</td>
+          <td><span class="pill">${r.profile}</span></td>
+          <td class="${pingBad?'bad':''}">${r.ping ?? '—'}</td>
+          <td>${r.down ?? '—'}</td>
+          <td>${r.up ?? '—'}</td>
+          <td class="${lossBad?'bad':'ok'}">${r.loss ?? '—'}</td>
+          <td class="${jitterBad?'bad':'ok'}">${r.jitter ?? '—'}</td>
+          <td class="${mtuGood?'ok':'bad'}">${r.pmtu ?? '—'}</td>
+          <td>${r.geo ?? ''}</td>
+        `;
+        tbody.appendChild(tr);
+      }
+    }
+
+    function populateServersSelect() {
+      const sids = Object.keys(window._series.perSid).sort();
+      elServer.innerHTML = sids.map(s => `<option>${s}</option>`).join('');
+    }
+
+    // События
+    document.getElementById('btn-refresh').addEventListener('click', () => { updateChart(); renderLastTable(); });
+    elServer.addEventListener('change', updateChart);
+    elMetric.addEventListener('change', updateChart);
+    elWindow.addEventListener('change', updateChart);
+    elChkNov.addEventListener('change', updateChart);
+    elChkGr.addEventListener('change', updateChart);
+    elChkBs.addEventListener('change', updateChart);
+
+    // Инициализация
+    (async function init() {
+      try {
+        const data = await loadStats();            // { points:[...], generated_at }
+        if (!data || !Array.isArray(data.points)) throw new Error('bad schema');
+        const series = transformPointsToSeries(data.points);
+        window._series = series;
+
+        populateServersSelect();
+        renderLastTable();
+        updateChart();
+      } catch (e) {
+        document.querySelectorAll('select,button,input').forEach(el => el.disabled = true);
+        const msg = document.createElement('div');
+        msg.className = 'small';
+        msg.style.marginTop = '12px';
+        msg.textContent = 'Не удалось загрузить /stats.json или схема не совпала.';
+        document.body.appendChild(msg);
+        console.error(e);
+      }
+    })();
+  </script>
+</body>
+</html>
