@@ -3,7 +3,7 @@ name: WireGuard Speedtest
 on:
   workflow_dispatch:
   schedule:
-    - cron: '*/30 * * * *'  # каждые 30 минут
+    - cron: '0 */2 * * *'  # каждые 2 часа (по UTC)
 
 # нужно, чтобы пушить в gh-pages токеном GITHUB_TOKEN
 permissions:
