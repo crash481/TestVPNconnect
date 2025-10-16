@@ -418,8 +418,8 @@ jobs:
 
           LOSS_BAD   = 1.0
           JITTER_BAD = 10.0
-          GRAND_DL_RED = 100.0
-          BASIC_DL_RED = 5.0
+          GRAND_DL_RED = 60.0
+          BASIC_DL_RED = 4.0
 
           NAME2CC = {
             "United States":"US","USA":"US",
